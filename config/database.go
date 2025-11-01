@@ -812,26 +812,53 @@ func (d *Database) GetTraderConfig(userID, traderID string) (*TraderRecord, *AIM
 	var aiModel AIModelConfig
 	var exchange ExchangeConfig
 
+	// 先获取交易员基本信息
 	err := d.db.QueryRow(`
-		SELECT 
-			t.id, t.user_id, t.name, t.ai_model_id, t.exchange_id, t.initial_balance, t.scan_interval_minutes, t.is_running, t.created_at, t.updated_at,
-			a.id, a.user_id, a.name, a.provider, a.enabled, a.api_key, a.created_at, a.updated_at,
-			e.id, e.user_id, e.name, e.type, e.enabled, e.api_key, e.secret_key, e.testnet,
-			COALESCE(e.hyperliquid_wallet_addr, '') as hyperliquid_wallet_addr,
-			COALESCE(e.aster_user, '') as aster_user,
-			COALESCE(e.aster_signer, '') as aster_signer,
-			COALESCE(e.aster_private_key, '') as aster_private_key,
-			e.created_at, e.updated_at
-		FROM traders t
-		JOIN ai_models a ON t.ai_model_id = a.id AND t.user_id = a.user_id
-		JOIN exchanges e ON t.exchange_id = e.id AND t.user_id = e.user_id
-		WHERE t.id = ? AND t.user_id = ?
+		SELECT id, user_id, name, ai_model_id, exchange_id, initial_balance, scan_interval_minutes, is_running,
+		       COALESCE(btc_eth_leverage, 5) as btc_eth_leverage, COALESCE(altcoin_leverage, 5) as altcoin_leverage,
+		       COALESCE(trading_symbols, '') as trading_symbols,
+		       COALESCE(use_coin_pool, 0) as use_coin_pool, COALESCE(use_oi_top, 0) as use_oi_top,
+		       COALESCE(custom_prompt, '') as custom_prompt, COALESCE(override_base_prompt, 0) as override_base_prompt,
+		       COALESCE(is_cross_margin, 1) as is_cross_margin, created_at, updated_at
+		FROM traders
+		WHERE id = ? AND user_id = ?
 	`, traderID, userID).Scan(
 		&trader.ID, &trader.UserID, &trader.Name, &trader.AIModelID, &trader.ExchangeID,
 		&trader.InitialBalance, &trader.ScanIntervalMinutes, &trader.IsRunning,
-		&trader.CreatedAt, &trader.UpdatedAt,
+		&trader.BTCETHLeverage, &trader.AltcoinLeverage, &trader.TradingSymbols,
+		&trader.UseCoinPool, &trader.UseOITop, &trader.CustomPrompt, &trader.OverrideBasePrompt,
+		&trader.IsCrossMargin, &trader.CreatedAt, &trader.UpdatedAt,
+	)
+
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("交易员不存在或不属于当前用户: %v", err)
+	}
+
+	// ai_model_id 存储的是 provider（如 "deepseek"），使用 provider 来查找 AI 模型
+	err = d.db.QueryRow(`
+		SELECT id, user_id, name, provider, enabled, api_key, created_at, updated_at
+		FROM ai_models
+		WHERE provider = ? AND user_id = ?
+	`, trader.AIModelID, userID).Scan(
 		&aiModel.ID, &aiModel.UserID, &aiModel.Name, &aiModel.Provider, &aiModel.Enabled, &aiModel.APIKey,
 		&aiModel.CreatedAt, &aiModel.UpdatedAt,
+	)
+
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("AI模型配置不存在 (provider: %s, user_id: %s): %v", trader.AIModelID, userID, err)
+	}
+
+	// 获取交易所配置
+	err = d.db.QueryRow(`
+		SELECT id, user_id, name, type, enabled, api_key, secret_key, testnet,
+		       COALESCE(hyperliquid_wallet_addr, '') as hyperliquid_wallet_addr,
+		       COALESCE(aster_user, '') as aster_user,
+		       COALESCE(aster_signer, '') as aster_signer,
+		       COALESCE(aster_private_key, '') as aster_private_key,
+		       created_at, updated_at
+		FROM exchanges
+		WHERE id = ? AND user_id = ?
+	`, trader.ExchangeID, userID).Scan(
 		&exchange.ID, &exchange.UserID, &exchange.Name, &exchange.Type, &exchange.Enabled,
 		&exchange.APIKey, &exchange.SecretKey, &exchange.Testnet,
 		&exchange.HyperliquidWalletAddr, &exchange.AsterUser, &exchange.AsterSigner, &exchange.AsterPrivateKey,
@@ -839,7 +866,7 @@ func (d *Database) GetTraderConfig(userID, traderID string) (*TraderRecord, *AIM
 	)
 
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, fmt.Errorf("交易所配置不存在 (exchange_id: %s, user_id: %s): %v", trader.ExchangeID, userID, err)
 	}
 
 	return &trader, &aiModel, &exchange, nil
