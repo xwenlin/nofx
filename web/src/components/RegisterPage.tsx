@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { t } from '../i18n/translations';
+import { getIconPath } from './ModelIcons';
 
 export function RegisterPage() {
   const { language } = useLanguage();
@@ -34,7 +35,7 @@ export function RegisterPage() {
     setLoading(true);
 
     const result = await register(email, password);
-    
+
     if (result.success && result.userID) {
       setUserID(result.userID);
       setOtpSecret(result.otpSecret || '');
@@ -43,7 +44,7 @@ export function RegisterPage() {
     } else {
       setError(result.message || t('registrationFailed', language));
     }
-    
+
     setLoading(false);
   };
 
@@ -57,12 +58,12 @@ export function RegisterPage() {
     setLoading(true);
 
     const result = await completeRegistration(userID, otpCode);
-    
+
     if (!result.success) {
       setError(result.message || t('registrationFailed', language));
     }
     // 成功的话AuthContext会自动处理登录状态
-    
+
     setLoading(false);
   };
 
@@ -76,7 +77,7 @@ export function RegisterPage() {
         {/* Logo */}
         <div className="text-center mb-8">
           <div className="w-16 h-16 mx-auto mb-4 flex items-center justify-center">
-            <img src="/icons/nofx.svg?v=2" alt="NOFX" className="w-16 h-16" />
+            <img src={getIconPath('nofx.svg') + '?v=2'} alt="NOFX" className="w-16 h-16" />
           </div>
           <h1 className="text-2xl font-bold" style={{ color: '#EAECEF' }}>
             {t('appTitle', language)}
@@ -183,22 +184,22 @@ export function RegisterPage() {
                   <p className="text-xs mb-2" style={{ color: '#848E9C' }}>
                     {t('step2Desc', language)}
                   </p>
-                  
+
                   {qrCodeURL && (
                     <div className="mt-2">
                       <p className="text-xs mb-2" style={{ color: '#848E9C' }}>{t('qrCodeHint', language)}</p>
                       <div className="bg-white p-2 rounded text-center">
-                        <img src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(qrCodeURL)}`} 
-                             alt="QR Code" className="mx-auto" />
+                        <img src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(qrCodeURL)}`}
+                          alt="QR Code" className="mx-auto" />
                       </div>
                     </div>
                   )}
-                  
+
                   <div className="mt-2">
                     <p className="text-xs mb-1" style={{ color: '#848E9C' }}>{t('otpSecret', language)}</p>
                     <div className="flex items-center gap-2">
-                      <code className="flex-1 px-2 py-1 text-xs rounded font-mono" 
-                            style={{ background: '#2B3139', color: '#EAECEF' }}>
+                      <code className="flex-1 px-2 py-1 text-xs rounded font-mono"
+                        style={{ background: '#2B3139', color: '#EAECEF' }}>
                         {otpSecret}
                       </code>
                       <button

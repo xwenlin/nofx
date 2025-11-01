@@ -1,5 +1,6 @@
 import { useLanguage } from '../contexts/LanguageContext';
 import { t } from '../i18n/translations';
+import { getIconPath } from './ModelIcons';
 
 interface HeaderProps {
   simple?: boolean; // For login/register pages
@@ -15,7 +16,7 @@ export function Header({ simple = false }: HeaderProps) {
           {/* Left - Logo and Title */}
           <div className="flex items-center gap-3">
             <div className="flex items-center justify-center">
-              <img src="/icons/nofx.svg?v=2" alt="NOFX" className="h-10 w-auto" />
+              <img src={getIconPath('nofx.svg') + '?v=2'} alt="NOFX" className="h-10 w-auto" />
             </div>
             <div>
               <h1 className="text-xl font-bold" style={{ color: '#EAECEF' }}>
@@ -28,7 +29,7 @@ export function Header({ simple = false }: HeaderProps) {
               )}
             </div>
           </div>
-          
+
           {/* Right - Language Toggle (always show) */}
           <div className="flex gap-1 rounded p-1" style={{ background: '#1E2329' }}>
             <button
