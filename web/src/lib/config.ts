@@ -12,7 +12,7 @@ export function getSystemConfig(): Promise<SystemConfig> {
   if (configPromise) {
     return configPromise;
   }
-  configPromise = fetch('/api/config')
+  configPromise = fetch('/nofx-api/config')
     .then((res) => res.json())
     .then((data: SystemConfig) => {
       cachedConfig = data;

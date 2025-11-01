@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import type { AIModel, Exchange, CreateTraderRequest } from '../types';
+import { useEffect, useState } from 'react';
+import type { AIModel, CreateTraderRequest, Exchange } from '../types';
 
 // 提取下划线后面的名称部分
 function getShortName(fullName: string): string {
@@ -33,14 +33,14 @@ interface TraderConfigModalProps {
   onSave?: (data: CreateTraderRequest) => Promise<void>;
 }
 
-export function TraderConfigModal({ 
-  isOpen, 
-  onClose, 
-  traderData, 
+export function TraderConfigModal({
+  isOpen,
+  onClose,
+  traderData,
   isEditMode = false,
   availableModels = [],
   availableExchanges = [],
-  onSave 
+  onSave
 }: TraderConfigModalProps) {
   const [formData, setFormData] = useState<TraderConfigData>({
     trader_name: '',
@@ -91,7 +91,7 @@ export function TraderConfigModal({
   useEffect(() => {
     const fetchConfig = async () => {
       try {
-        const response = await fetch('/api/config');
+        const response = await fetch('/nofx-api/config');
         const config = await response.json();
         if (config.default_coins) {
           setAvailableCoins(config.default_coins);
@@ -115,7 +115,7 @@ export function TraderConfigModal({
 
   const handleInputChange = (field: keyof TraderConfigData, value: any) => {
     setFormData(prev => ({ ...prev, [field]: value }));
-    
+
     // 如果是直接编辑trading_symbols，同步更新selectedCoins
     if (field === 'trading_symbols') {
       const coins = value.split(',').map((s: string) => s.trim()).filter((s: string) => s);
@@ -135,7 +135,7 @@ export function TraderConfigModal({
 
   const handleSave = async () => {
     if (!onSave) return;
-    
+
     setIsSaving(true);
     try {
       const saveData: CreateTraderRequest = {
@@ -163,7 +163,7 @@ export function TraderConfigModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 backdrop-blur-sm">
-      <div 
+      <div
         className="bg-[#1E2329] border border-[#2B3139] rounded-xl shadow-2xl max-w-3xl w-full mx-4 max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
@@ -255,22 +255,20 @@ export function TraderConfigModal({
                     <button
                       type="button"
                       onClick={() => handleInputChange('is_cross_margin', true)}
-                      className={`flex-1 px-3 py-2 rounded text-sm ${
-                        formData.is_cross_margin 
-                          ? 'bg-[#F0B90B] text-black' 
-                          : 'bg-[#0B0E11] text-[#848E9C] border border-[#2B3139]'
-                      }`}
+                      className={`flex-1 px-3 py-2 rounded text-sm ${formData.is_cross_margin
+                        ? 'bg-[#F0B90B] text-black'
+                        : 'bg-[#0B0E11] text-[#848E9C] border border-[#2B3139]'
+                        }`}
                     >
                       全仓
                     </button>
                     <button
                       type="button"
                       onClick={() => handleInputChange('is_cross_margin', false)}
-                      className={`flex-1 px-3 py-2 rounded text-sm ${
-                        !formData.is_cross_margin 
-                          ? 'bg-[#F0B90B] text-black' 
-                          : 'bg-[#0B0E11] text-[#848E9C] border border-[#2B3139]'
-                      }`}
+                      className={`flex-1 px-3 py-2 rounded text-sm ${!formData.is_cross_margin
+                        ? 'bg-[#F0B90B] text-black'
+                        : 'bg-[#0B0E11] text-[#848E9C] border border-[#2B3139]'
+                        }`}
                     >
                       逐仓
                     </button>
@@ -334,7 +332,7 @@ export function TraderConfigModal({
                   className="w-full px-3 py-2 bg-[#0B0E11] border border-[#2B3139] rounded text-[#EAECEF] focus:border-[#F0B90B] focus:outline-none"
                   placeholder="例如: BTCUSDT,ETHUSDT,ADAUSDT"
                 />
-                
+
                 {/* 币种选择器 */}
                 {showCoinSelector && (
                   <div className="mt-3 p-3 bg-[#0B0E11] border border-[#2B3139] rounded">
@@ -345,11 +343,10 @@ export function TraderConfigModal({
                           key={coin}
                           type="button"
                           onClick={() => handleCoinToggle(coin)}
-                          className={`px-2 py-1 text-xs rounded transition-colors ${
-                            selectedCoins.includes(coin)
-                              ? 'bg-[#F0B90B] text-black'
-                              : 'bg-[#1E2329] text-[#848E9C] border border-[#2B3139] hover:border-[#F0B90B]'
-                          }`}
+                          className={`px-2 py-1 text-xs rounded transition-colors ${selectedCoins.includes(coin)
+                            ? 'bg-[#F0B90B] text-black'
+                            : 'bg-[#1E2329] text-[#848E9C] border border-[#2B3139] hover:border-[#F0B90B]'
+                            }`}
                         >
                           {coin.replace('USDT', '')}
                         </button>

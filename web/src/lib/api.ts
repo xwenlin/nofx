@@ -13,7 +13,7 @@ import type {
   CompetitionData,
 } from '../types';
 
-const API_BASE = '/api';
+const API_BASE = '/nofx-api';
 
 // Helper function to get auth headers
 function getAuthHeaders(): Record<string, string> {

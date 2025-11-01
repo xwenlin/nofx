@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useEffect, useState } from 'react';
 import { getSystemConfig } from '../lib/config';
 
 interface User {
@@ -36,7 +36,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           // 非管理员模式，检查本地存储中是否有token
           const savedToken = localStorage.getItem('auth_token');
           const savedUser = localStorage.getItem('auth_user');
-          
+
           if (savedToken && savedUser) {
             setToken(savedToken);
             setUser(JSON.parse(savedUser));
@@ -49,7 +49,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // 发生错误时，继续检查本地存储
         const savedToken = localStorage.getItem('auth_token');
         const savedUser = localStorage.getItem('auth_user');
-        
+
         if (savedToken && savedUser) {
           setToken(savedToken);
           setUser(JSON.parse(savedUser));
@@ -60,7 +60,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = async (email: string, password: string) => {
     try {
-      const response = await fetch('/api/login', {
+      const response = await fetch('/nofx-api/login', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -91,7 +91,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const register = async (email: string, password: string) => {
     try {
-      const response = await fetch('/api/register', {
+      const response = await fetch('/nofx-api/register', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -119,7 +119,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const verifyOTP = async (userID: string, otpCode: string) => {
     try {
-      const response = await fetch('/api/verify-otp', {
+      const response = await fetch('/nofx-api/verify-otp', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -136,11 +136,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(userInfo);
         localStorage.setItem('auth_token', data.token);
         localStorage.setItem('auth_user', JSON.stringify(userInfo));
-        
+
         // 跳转到首页
         window.history.pushState({}, '', '/');
         window.dispatchEvent(new PopStateEvent('popstate'));
-        
+
         return { success: true, message: data.message };
       } else {
         return { success: false, message: data.error };
@@ -152,7 +152,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const completeRegistration = async (userID: string, otpCode: string) => {
     try {
-      const response = await fetch('/api/complete-registration', {
+      const response = await fetch('/nofx-api/complete-registration', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -169,11 +169,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(userInfo);
         localStorage.setItem('auth_token', data.token);
         localStorage.setItem('auth_user', JSON.stringify(userInfo));
-        
+
         // 跳转到首页
         window.history.pushState({}, '', '/');
         window.dispatchEvent(new PopStateEvent('popstate'));
-        
+
         return { success: true, message: data.message };
       } else {
         return { success: false, message: data.error };
