@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,7 +39,7 @@ func NewFuturesTrader(apiKey, secretKey string) *FuturesTrader {
 	}
 }
 
-// GetBalance 获取账户余额（带缓存）
+// GetBalance 获取账户余额（带缓存和重试机制）
 func (t *FuturesTrader) GetBalance() (map[string]interface{}, error) {
 	// 先检查缓存是否有效
 	t.balanceCacheMutex.RLock()
@@ -50,14 +51,49 @@ func (t *FuturesTrader) GetBalance() (map[string]interface{}, error) {
 	}
 	t.balanceCacheMutex.RUnlock()
 
-	// 缓存过期或不存在，调用API
+	// 缓存过期或不存在，调用API（带重试机制）
 	log.Printf("🔄 缓存过期，正在调用币安API获取账户余额...")
-	account, err := t.client.NewGetAccountService().Do(context.Background())
-	if err != nil {
+	
+	// 重试机制：专门处理时间戳错误
+	maxRetries := 3
+	var lastErr error
+	var account *futures.Account
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		if attempt > 1 {
+			// 时间戳错误时，等待一小段时间后重试
+			waitTime := time.Duration(attempt-1) * time.Second
+			log.Printf("⚠️  币安API调用失败，等待%v后重试 (%d/%d)...", waitTime, attempt, maxRetries)
+			time.Sleep(waitTime)
+		}
+		
+		acc, err := t.client.NewGetAccountService().Do(context.Background())
+		if err == nil {
+			account = acc
+			break
+		}
+		
+		lastErr = err
+		errStr := err.Error()
+		
+		// 检查是否是时间戳错误（-1021）
+		if strings.Contains(errStr, "-1021") || strings.Contains(errStr, "outside of the recvWindow") || strings.Contains(errStr, "Timestamp") {
+			log.Printf("⚠️  检测到时间戳错误，将在重试时生成新的时间戳")
+			if attempt < maxRetries {
+				continue // 重试
+			}
+		}
+		
+		// 其他错误不重试，直接返回
 		log.Printf("❌ 币安API调用失败: %v", err)
 		return nil, fmt.Errorf("获取账户信息失败: %w", err)
 	}
+	
+	// 如果所有重试都失败
+	if account == nil {
+		return nil, fmt.Errorf("获取账户信息失败（已重试%d次）: %w", maxRetries, lastErr)
+	}
 
+	// 解析账户数据
 	result := make(map[string]interface{})
 	result["totalWalletBalance"], _ = strconv.ParseFloat(account.TotalWalletBalance, 64)
 	result["availableBalance"], _ = strconv.ParseFloat(account.AvailableBalance, 64)
@@ -77,7 +113,7 @@ func (t *FuturesTrader) GetBalance() (map[string]interface{}, error) {
 	return result, nil
 }
 
-// GetPositions 获取所有持仓（带缓存）
+// GetPositions 获取所有持仓（带缓存和重试机制）
 func (t *FuturesTrader) GetPositions() ([]map[string]interface{}, error) {
 	// 先检查缓存是否有效
 	t.positionsCacheMutex.RLock()
@@ -89,11 +125,44 @@ func (t *FuturesTrader) GetPositions() ([]map[string]interface{}, error) {
 	}
 	t.positionsCacheMutex.RUnlock()
 
-	// 缓存过期或不存在，调用API
+	// 缓存过期或不存在，调用API（带重试机制）
 	log.Printf("🔄 缓存过期，正在调用币安API获取持仓信息...")
-	positions, err := t.client.NewGetPositionRiskService().Do(context.Background())
-	if err != nil {
+	
+	// 重试机制：专门处理时间戳错误
+	maxRetries := 3
+	var lastErr error
+	var positions []*futures.PositionRisk
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		if attempt > 1 {
+			// 时间戳错误时，等待一小段时间后重试
+			waitTime := time.Duration(attempt-1) * time.Second
+			log.Printf("⚠️  币安API调用失败，等待%v后重试 (%d/%d)...", waitTime, attempt, maxRetries)
+			time.Sleep(waitTime)
+		}
+		
+		pos, err := t.client.NewGetPositionRiskService().Do(context.Background())
+		if err == nil {
+			positions = pos
+			break
+		}
+		
+		lastErr = err
+		errStr := err.Error()
+		
+		// 检查是否是时间戳错误（-1021）
+		if strings.Contains(errStr, "-1021") || strings.Contains(errStr, "outside of the recvWindow") || strings.Contains(errStr, "Timestamp") {
+			log.Printf("⚠️  检测到时间戳错误，将在重试时生成新的时间戳")
+			if attempt < maxRetries {
+				continue // 重试
+			}
+		}
+		
+		// 其他错误不重试，直接返回
 		return nil, fmt.Errorf("获取持仓失败: %w", err)
+	}
+	
+	if lastErr != nil && len(positions) == 0 {
+		return nil, fmt.Errorf("获取持仓失败（已重试%d次）: %w", maxRetries, lastErr)
 	}
 
 	var result []map[string]interface{}
