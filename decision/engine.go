@@ -366,16 +366,32 @@ func buildUserPrompt(ctx *Context) string {
 	}
 	sb.WriteString("\n")
 
-	// 夏普比率（直接传值，不要复杂格式化）
+	// 历史表现分析（精简版本：只传递核心指标，符合系统提示词"夏普比率是唯一指标"的要求）
 	if ctx.Performance != nil {
-		// 直接从interface{}中提取SharpeRatio
+		sb.WriteString("## 📊 历史表现分析\n\n")
+		
+		// 定义精简的Performance数据结构
 		type PerformanceData struct {
+			TotalTrades int     `json:"total_trades"`
 			SharpeRatio float64 `json:"sharpe_ratio"`
 		}
+		
 		var perfData PerformanceData
 		if jsonData, err := json.Marshal(ctx.Performance); err == nil {
 			if err := json.Unmarshal(jsonData, &perfData); err == nil {
-				sb.WriteString(fmt.Sprintf("## 📊 夏普比率: %.2f\n\n", perfData.SharpeRatio))
+				if perfData.TotalTrades > 0 {
+					// 核心指标：夏普比率（系统提示词明确要求的唯一指标）
+					sb.WriteString(fmt.Sprintf("**夏普比率**: %.2f (这是你的核心绩效指标，用于调整交易策略)\n\n",
+						perfData.SharpeRatio))
+					
+					// 交易频率提醒（帮助AI判断是否过度交易）
+					// 假设分析窗口是1000个周期（约50小时），帮助AI判断交易频率是否合理
+					sb.WriteString(fmt.Sprintf("**总交易数**: %d (最近1000个周期内，用于判断交易频率是否合理)\n\n",
+						perfData.TotalTrades))
+				} else {
+					// 如果没有交易记录，只显示提示
+					sb.WriteString("**当前无历史交易记录**\n\n")
+				}
 			}
 		}
 	}
