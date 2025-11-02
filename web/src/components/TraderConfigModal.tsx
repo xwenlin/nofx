@@ -66,7 +66,34 @@ export function TraderConfigModal({
 
   useEffect(() => {
     if (traderData) {
-      setFormData(traderData);
+      console.log('traderData', traderData);
+      console.log('availableModels', availableModels);
+      // 后端返回的 ai_model 可能是 provider（如 "deepseek"），需要匹配到 allModels 中的实际 ID
+      let aiModelId = traderData.ai_model;
+
+      // 尝试通过 ID 直接匹配
+      let matchedModel = availableModels.find(m => m.id === aiModelId);
+
+      // 如果找不到，尝试通过 provider 匹配
+      if (!matchedModel) {
+        matchedModel = availableModels.find(m =>
+          m.provider === aiModelId ||
+          m.id === aiModelId ||
+          (m.id && m.id.endsWith('_' + aiModelId)) ||
+          (m.id && m.id.split('_').pop() === aiModelId)
+        );
+      }
+
+      // 如果找到了匹配的模型，使用它的 ID
+      if (matchedModel) {
+        aiModelId = matchedModel.id;
+      }
+
+      setFormData({
+        ...traderData,
+        ai_model: aiModelId  // 使用匹配到的模型 ID
+      });
+
       // 设置已选择的币种
       if (traderData.trading_symbols) {
         const coins = traderData.trading_symbols.split(',').map(s => s.trim()).filter(s => s);

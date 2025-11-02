@@ -9,7 +9,7 @@ export default defineConfig({
     port: 3000,
     proxy: {
       '/nofx-api': {
-        target: 'http://localhost:8080',
+        target: 'http://localhost:18080',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/nofx-api/, '/api'),
       },

@@ -4,20 +4,205 @@
 
 ---
 
-## 2025-11-02 - 修复前端编辑模型时提示"模型不存在"的问题
+## 2025-11-02 - 修复编辑交易员时提示"AI模型配置不存在"的问题
 
 ### 问题描述
-在前端编辑交易员时，如果选择的模型被禁用或没有配置 API Key，系统会提示"模型不存在"，导致无法保存编辑。
+在编辑交易员时，系统提示错误：`{"error":"获取交易员配置失败: AI模型配置不存在 (provider: admin_deepseek, user_id: admin): sql: no rows in result set"}`，导致无法编辑交易员。
 
 ### 根本原因
-在 `handleSaveEditTrader` 函数中，代码只从 `enabledModels`（已启用且有 API Key 的模型列表）中查找模型，导致被禁用的模型无法被找到，从而触发错误提示。
+在 `GetTraderConfig` 函数中，代码假设 `traders` 表中的 `ai_model_id` 字段存储的是 provider（如 `"deepseek"`），直接使用 `provider = ?` 来查找 AI 模型。但实际数据库中 `ai_model_id` 可能存储的是用户特定的 ID（如 `"admin_deepseek"`），导致查询失败。
+
+**数据格式不一致：**
+- `traders.ai_model_id` 可能存储：`"admin_deepseek"`（用户特定ID）或 `"deepseek"`（provider）
+- `ai_models.id` 存储：`"admin_deepseek"`（用户特定ID）
+- `ai_models.provider` 存储：`"deepseek"`（标准provider）
 
 ### 修改文件
-- `web/src/components/AITradersPage.tsx`
+- `config/database.go`
 
 ### 具体修改
 
-#### 1. 修改 `handleSaveEditTrader` 函数（第 164-180 行）
+#### 修改 `GetTraderConfig` 函数中的 AI 模型查找逻辑（第 876-929 行）
+
+**修改前：**
+```go
+// ai_model_id 存储的是 provider（如 "deepseek"），使用 provider 来查找 AI 模型
+err = d.db.QueryRow(`
+    SELECT id, user_id, name, provider, enabled, api_key, created_at, updated_at
+    FROM ai_models
+    WHERE provider = ? AND user_id = ?
+`, trader.AIModelID, userID).Scan(
+    &aiModel.ID, &aiModel.UserID, &aiModel.Name, &aiModel.Provider, &aiModel.Enabled, &aiModel.APIKey,
+    &aiModel.CreatedAt, &aiModel.UpdatedAt,
+)
+
+if err != nil {
+    return nil, nil, nil, fmt.Errorf("AI模型配置不存在 (provider: %s, user_id: %s): %v", trader.AIModelID, userID, err)
+}
+```
+
+**修改后：**
+```go
+// ai_model_id 可能是用户特定的ID（如 "admin_deepseek"）或 provider（如 "deepseek"）
+// 首先尝试通过 ID 查找（新版逻辑）
+err = d.db.QueryRow(`
+    SELECT id, user_id, name, provider, enabled, api_key,
+           COALESCE(custom_api_url, '') as custom_api_url,
+           COALESCE(custom_model_name, '') as custom_model_name,
+           created_at, updated_at
+    FROM ai_models
+    WHERE id = ? AND user_id = ?
+`, trader.AIModelID, userID).Scan(
+    &aiModel.ID, &aiModel.UserID, &aiModel.Name, &aiModel.Provider, &aiModel.Enabled, &aiModel.APIKey,
+    &aiModel.CustomAPIURL, &aiModel.CustomModelName,
+    &aiModel.CreatedAt, &aiModel.UpdatedAt,
+)
+
+// 如果通过 ID 找不到，尝试通过 provider 查找（兼容旧数据）
+if err != nil {
+    err = d.db.QueryRow(`
+        SELECT id, user_id, name, provider, enabled, api_key,
+               COALESCE(custom_api_url, '') as custom_api_url,
+               COALESCE(custom_model_name, '') as custom_model_name,
+               created_at, updated_at
+        FROM ai_models
+        WHERE provider = ? AND user_id = ?
+    `, trader.AIModelID, userID).Scan(
+        &aiModel.ID, &aiModel.UserID, &aiModel.Name, &aiModel.Provider, &aiModel.Enabled, &aiModel.APIKey,
+        &aiModel.CustomAPIURL, &aiModel.CustomModelName,
+        &aiModel.CreatedAt, &aiModel.UpdatedAt,
+    )
+}
+
+// 如果还是找不到，尝试提取后缀作为 provider（例如 "admin_deepseek" -> "deepseek"）
+if err != nil {
+    if strings.Contains(trader.AIModelID, "_") {
+        parts := strings.Split(trader.AIModelID, "_")
+        lastPart := parts[len(parts)-1]
+        err = d.db.QueryRow(`
+            SELECT id, user_id, name, provider, enabled, api_key,
+                   COALESCE(custom_api_url, '') as custom_api_url,
+                   COALESCE(custom_model_name, '') as custom_model_name,
+                   created_at, updated_at
+            FROM ai_models
+            WHERE (provider = ? OR id = ?) AND user_id = ?
+        `, lastPart, lastPart, userID).Scan(
+            &aiModel.ID, &aiModel.UserID, &aiModel.Name, &aiModel.Provider, &aiModel.Enabled, &aiModel.APIKey,
+            &aiModel.CustomAPIURL, &aiModel.CustomModelName,
+            &aiModel.CreatedAt, &aiModel.UpdatedAt,
+        )
+    }
+}
+
+if err != nil {
+    return nil, nil, nil, fmt.Errorf("AI模型配置不存在 (ai_model_id: %s, user_id: %s): %v", trader.AIModelID, userID, err)
+}
+```
+
+### 修改说明
+1. **多级匹配逻辑**：
+   - 首先尝试通过 ID 直接匹配（适用于新数据，`ai_model_id` 存储用户特定ID的情况）
+   - 如果找不到，尝试通过 provider 匹配（兼容旧数据，`ai_model_id` 存储 provider 的情况）
+   - 如果还是找不到，提取 ID 后缀作为 provider 匹配（例如 `"admin_deepseek"` 的后缀 `"deepseek"` 匹配 provider）
+
+2. **兼容新旧数据格式**：
+   - 支持 `ai_model_id` 存储用户特定ID（如 `"admin_deepseek"`）
+   - 支持 `ai_model_id` 存储 provider（如 `"deepseek"`）
+   - 自动处理ID包含下划线的情况
+
+3. **增强查询字段**：
+   - 同时查询 `custom_api_url` 和 `custom_model_name` 字段，确保完整获取模型配置信息
+
+### 影响范围
+- ✅ 修复了编辑交易员时提示"AI模型配置不存在"的问题
+- ✅ 支持用户特定ID和provider两种格式的匹配
+- ✅ 兼容旧数据和新数据格式
+- ✅ 不影响其他功能的正常运行
+
+### 测试建议
+1. 编辑一个使用用户特定ID（如 `"admin_deepseek"`）的交易员，应该能够正常加载配置
+2. 编辑一个使用provider（如 `"deepseek"`）的交易员，应该能够正常加载配置
+3. 验证不同ID格式都能正确匹配到对应的AI模型配置
+
+---
+
+## 2025-11-02 - 修复更新交易员时提示"AI模型配置不存在或未启用"的问题
+
+### 问题描述
+在修改交易员配置并保存时，系统提示"AI模型配置不存在或未启用"，导致无法保存编辑。即使模型和交易所都已启用，仍然提示此错误。
+
+### 根本原因
+问题有两个层面：
+
+1. **数据格式不匹配**：
+   - 后端 `handleGetTraderConfig` 返回的 `ai_model` 字段是处理后的 provider（如 `"deepseek"`），而不是用户特定的ID（如 `"admin_deepseek"`）
+   - 前端的 `allModels` 中的模型 ID 是用户特定格式（如 `"admin_deepseek"`）
+   - 当编辑时，`data.ai_model_id` 传入的是 `"deepseek"`（provider），但在 `allModels` 中查找时找不到匹配的模型，因为 `allModels` 中的 ID 是 `"admin_deepseek"`
+
+2. **验证逻辑问题**：
+   - 在 `handleSaveEditTrader` 函数中，代码从 `enabledModels`（已启用且有 API Key 的模型列表）中查找模型，如果模型被禁用或没有 API Key，就无法通过验证
+   - 编辑模态框也使用 `enabledModels` 和 `enabledExchanges` 作为可用选项，导致无法选择被禁用的模型和交易所
+
+### 修改文件
+- `web/src/components/AITradersPage.tsx`
+- `web/src/components/TraderConfigModal.tsx`
+
+### 具体修改
+
+#### 1. 修改 `TraderConfigModal` 组件中的模型ID匹配逻辑（第 67-99 行）
+
+**修改前：**
+```typescript
+useEffect(() => {
+  if (traderData) {
+    setFormData(traderData);
+    // 设置已选择的币种
+    if (traderData.trading_symbols) {
+      const coins = traderData.trading_symbols.split(',').map(s => s.trim()).filter(s => s);
+      setSelectedCoins(coins);
+    }
+  }
+```
+
+**修改后：**
+```typescript
+useEffect(() => {
+  if (traderData) {
+    // 后端返回的 ai_model 可能是 provider（如 "deepseek"），需要匹配到 allModels 中的实际 ID
+    let aiModelId = traderData.ai_model;
+    
+    // 尝试通过 ID 直接匹配
+    let matchedModel = availableModels.find(m => m.id === aiModelId);
+    
+    // 如果找不到，尝试通过 provider 匹配
+    if (!matchedModel) {
+      matchedModel = availableModels.find(m => 
+        m.provider === aiModelId || 
+        m.id === aiModelId ||
+        (m.id && m.id.endsWith('_' + aiModelId)) ||
+        (m.id && m.id.split('_').pop() === aiModelId)
+      );
+    }
+    
+    // 如果找到了匹配的模型，使用它的 ID
+    if (matchedModel) {
+      aiModelId = matchedModel.id;
+    }
+    
+    setFormData({
+      ...traderData,
+      ai_model: aiModelId  // 使用匹配到的模型 ID
+    });
+    
+    // 设置已选择的币种
+    if (traderData.trading_symbols) {
+      const coins = traderData.trading_symbols.split(',').map(s => s.trim()).filter(s => s);
+      setSelectedCoins(coins);
+    }
+  }
+```
+
+#### 2. 修改 `handleSaveEditTrader` 函数中的模型和交易所查找逻辑（第 164-209 行）
 
 **修改前：**
 ```typescript
@@ -46,21 +231,52 @@ const handleSaveEditTrader = async (data: CreateTraderRequest) => {
 
   try {
     // 编辑模式下，从 allModels 和 allExchanges 中查找，允许编辑被禁用的配置
-    const model = allModels?.find(m => m.id === data.ai_model_id);
+    let model = allModels?.find(m => m.id === data.ai_model_id);
+    
+    // 如果通过 ID 找不到，尝试通过 provider 匹配
+    if (!model && data.ai_model_id) {
+      model = allModels?.find(m => 
+        m.provider === data.ai_model_id ||
+        m.id === data.ai_model_id ||
+        (m.id && m.id.endsWith('_' + data.ai_model_id)) ||
+        (m.id && m.id.split('_').pop() === data.ai_model_id)
+      );
+    }
+    
     const exchange = allExchanges?.find(e => e.id === data.exchange_id);
 
     if (!model) {
+      console.error('模型未找到:', {
+        ai_model_id: data.ai_model_id,
+        allModelsIds: allModels?.map(m => ({ id: m.id, provider: m.provider, enabled: m.enabled })),
+        allModelsCount: allModels?.length
+      });
       alert(t('modelConfigNotExist', language));
       return;
     }
 
     if (!exchange) {
+      console.error('交易所未找到:', {
+        exchange_id: data.exchange_id,
+        allExchangesIds: allExchanges?.map(e => ({ id: e.id, enabled: e.enabled })),
+        allExchangesCount: allExchanges?.length
+      });
       alert(t('exchangeConfigNotExist', language));
       return;
     }
+    
+    // 如果找到了匹配的模型，使用它的 ID（确保使用正确的ID格式）
+    const finalAIModelId = model.id;
+
+    const request = {
+      name: data.name,
+      ai_model_id: finalAIModelId,  // 使用匹配到的模型 ID，而不是可能不匹配的 data.ai_model_id
+      exchange_id: data.exchange_id,
+      // ...
+    };
 ```
 
-#### 2. 修改编辑模态框的模型和交易所列表（第 762-777 行）
+#### 2. 修改编辑模态框的模型和交易所列表（第 785-800 行）
 
 **修改前：**
 ```typescript
@@ -102,22 +318,152 @@ const handleSaveEditTrader = async (data: CreateTraderRequest) => {
 ```
 
 ### 修改说明
-1. **编辑验证逻辑**：在保存编辑时，从 `allModels` 和 `allExchanges` 中查找模型和交易所，而不是从过滤后的 `enabledModels` 和 `enabledExchanges` 中查找。这样允许用户编辑使用被禁用配置的交易员。
+1. **模型ID匹配逻辑**：
+   - 在 `TraderConfigModal` 中，当加载交易员配置时，尝试将后端返回的 `ai_model`（可能是 provider，如 `"deepseek"`）匹配到 `availableModels` 中的实际模型ID（如 `"admin_deepseek"`）
+   - 支持通过 ID 直接匹配、通过 provider 匹配、通过ID后缀匹配等多种方式
 
-2. **编辑模态框选项**：编辑模式下，模态框使用 `allModels` 和 `allExchanges` 作为可用选项，确保所有已配置的模型和交易所都可以选择，即使它们当前被禁用。
+2. **保存时验证逻辑**：
+   - 在 `handleSaveEditTrader` 中，首先尝试通过 ID 直接匹配
+   - 如果找不到，尝试通过 provider 或后缀匹配
+   - 如果找到了匹配的模型，使用其实际的 ID 发送到后端，而不是可能不匹配的 `data.ai_model_id`
 
-3. **保持创建验证不变**：创建新交易员时仍然使用 `enabledModels` 和 `enabledExchanges`，确保只有启用且配置完整的模型和交易所才能用于新交易员。
+3. **编辑验证逻辑**：在保存编辑时，从 `allModels` 和 `allExchanges` 中查找模型和交易所，而不是从过滤后的 `enabledModels` 和 `enabledExchanges` 中查找。这样允许用户编辑使用被禁用配置的交易员。
+
+4. **编辑模态框选项**：编辑模式下，模态框使用 `allModels` 和 `allExchanges` 作为可用选项，确保所有已配置的模型和交易所都可以选择，即使它们当前被禁用。
+
+5. **保持创建验证不变**：创建新交易员时仍然使用 `enabledModels` 和 `enabledExchanges`，确保只有启用且配置完整的模型和交易所才能用于新交易员。
+
+6. **增强错误调试**：添加了详细的日志输出，当找不到模型或交易所时，输出所有可用的ID列表，便于调试问题。
 
 ### 影响范围
-- ✅ 修复了编辑交易员时无法保存使用被禁用模型的配置的问题
-- ✅ 允许用户在编辑时选择任何已配置的模型和交易所
+- ✅ 修复了更新交易员时提示"AI模型配置不存在或未启用"的问题
+- ✅ 允许用户在编辑时选择任何已配置的模型和交易所（即使被禁用）
 - ✅ 不影响创建新交易员的验证逻辑
+- ✅ 允许编辑使用被禁用配置的交易员
 
 ### 测试建议
 1. 创建一个使用某个模型的交易员
 2. 禁用该模型
 3. 尝试编辑该交易员，应该能够正常保存
 4. 验证创建新交易员时仍然只显示已启用的模型和交易所
+
+---
+
+## 2025-11-02 - 修复编辑模型配置时提示"模型不存在"的问题
+
+### 问题描述
+在编辑模型配置界面保存时，系统提示"模型不存在"，导致无法保存编辑。
+
+### 根本原因
+在 `handleSaveModelConfig` 函数中，当编辑已配置的模型时，传入的 `modelId` 是来自 `allModels`（用户已配置的模型列表）的 ID，格式可能是 `"admin_deepseek"` 或 `"user_deepseek"` 这样的用户特定 ID。但是代码只在 `supportedModels`（系统支持的模型列表）中通过 ID 直接匹配查找，而 `supportedModels` 中的 ID 格式可能是 `"deepseek"` 这样的系统标准 ID，导致匹配失败。
+
+**数据来源区别：**
+- `allModels`：从 `/api/models` 获取，是当前用户已配置的模型列表，包含 API Key 等用户配置信息，ID 可能包含用户标识前缀（如 `"admin_deepseek"`）
+- `supportedModels`：从 `/api/supported-models` 获取，是系统支持的所有模型列表，只有模型基本信息，ID 通常是标准的 provider 名称（如 `"deepseek"`）
+
+### 修改文件
+- `web/src/components/AITradersPage.tsx`
+
+### 具体修改
+
+#### 修改 `handleSaveModelConfig` 函数（第 278-331 行）
+
+**修改前：**
+```typescript
+const handleSaveModelConfig = async (modelId: string, apiKey: string, customApiUrl?: string, customModelName?: string) => {
+  try {
+    // 找到要配置的模型（从supportedModels中）
+    const modelToUpdate = supportedModels?.find(m => m.id === modelId);
+    if (!modelToUpdate) {
+      alert(t('modelNotExist', language));
+      return;
+    }
+```
+
+**修改后：**
+```typescript
+const handleSaveModelConfig = async (modelId: string, apiKey: string, customApiUrl?: string, customModelName?: string) => {
+  try {
+    // 首先从已配置的模型中查找（编辑模式时使用）
+    let configuredModel = allModels?.find(m => m.id === modelId);
+    
+    // 从supportedModels中查找模型
+    let modelToUpdate = supportedModels?.find(m => m.id === modelId);
+    
+    // 如果通过ID找不到，尝试通过provider匹配
+    if (!modelToUpdate && configuredModel?.provider) {
+      modelToUpdate = supportedModels?.find(m => 
+        m.provider === configuredModel.provider || 
+        m.id === configuredModel.provider ||
+        (configuredModel.id && m.id === configuredModel.id)
+      );
+    }
+    
+    // 如果还是找不到，尝试在supportedModels中查找任何匹配的模型
+    if (!modelToUpdate) {
+      // 尝试通过ID的后缀匹配（例如 "admin_deepseek" 匹配 "deepseek"）
+      const modelIdParts = modelId.split('_');
+      const lastPart = modelIdParts[modelIdParts.length - 1];
+      modelToUpdate = supportedModels?.find(m => 
+        m.id === lastPart || 
+        m.id === modelId || 
+        m.provider === lastPart ||
+        m.provider === modelId
+      );
+    }
+    
+    if (!modelToUpdate) {
+      console.error('模型不存在:', { 
+        modelId, 
+        supportedModelsIds: supportedModels?.map(m => m.id),
+        allModelsIds: allModels?.map(m => m.id)
+      });
+      alert(t('modelNotExist', language));
+      return;
+    }
+```
+
+#### 改进 existingModel 查找逻辑
+
+**修改后：**
+```typescript
+// 创建或更新用户的模型配置
+let existingModel = configuredModel;
+if (!existingModel && modelToUpdate?.provider) {
+  existingModel = allModels?.find(m => 
+    m.provider === modelToUpdate.provider || 
+    m.id === modelToUpdate.provider ||
+    m.id === modelToUpdate.id
+  );
+}
+```
+
+### 修改说明
+1. **多级匹配逻辑**：
+   - 首先尝试通过 ID 直接匹配（适用于新建模式和ID格式一致的情况）
+   - 如果找不到，通过 `provider` 匹配（适用于编辑模式，用户配置的ID包含前缀的情况）
+   - 如果还是找不到，通过ID后缀匹配（例如 `"admin_deepseek"` 的后缀 `"deepseek"` 匹配系统标准ID）
+
+2. **兼容编辑和新建模式**：
+   - 编辑模式：`modelId` 来自 `allModels`（用户已配置），可能是 `"admin_deepseek"` 格式
+   - 新建模式：`modelId` 来自 `supportedModels`（系统支持），是 `"deepseek"` 格式
+   - 两种模式都能正确匹配到对应的模型
+
+3. **保持数据完整性**：
+   - 更新时保持使用原有的模型ID（用户配置的ID），确保数据库一致性
+   - 新建时使用系统标准的模型ID
+
+### 影响范围
+- ✅ 修复了编辑模型配置时提示"模型不存在"的问题
+- ✅ 支持编辑模式时用户特定ID与系统标准ID的匹配
+- ✅ 不影响新建模型配置的功能
+- ✅ 增强了模型匹配的健壮性
+
+### 测试建议
+1. 编辑一个已配置的模型，应该能够正常保存
+2. 新建一个模型配置，应该能够正常保存
+3. 验证不同ID格式（包含前缀和不包含前缀）都能正确匹配
+4. 检查控制台是否有匹配失败的错误日志
 
 ---
 

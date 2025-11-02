@@ -873,18 +873,59 @@ func (d *Database) GetTraderConfig(userID, traderID string) (*TraderRecord, *AIM
 		return nil, nil, nil, fmt.Errorf("交易员不存在或不属于当前用户: %v", err)
 	}
 
-	// ai_model_id 存储的是 provider（如 "deepseek"），使用 provider 来查找 AI 模型
+	// ai_model_id 可能是用户特定的ID（如 "admin_deepseek"）或 provider（如 "deepseek"）
+	// 首先尝试通过 ID 查找（新版逻辑）
 	err = d.db.QueryRow(`
-		SELECT id, user_id, name, provider, enabled, api_key, created_at, updated_at
+		SELECT id, user_id, name, provider, enabled, api_key,
+		       COALESCE(custom_api_url, '') as custom_api_url,
+		       COALESCE(custom_model_name, '') as custom_model_name,
+		       created_at, updated_at
 		FROM ai_models
-		WHERE provider = ? AND user_id = ?
+		WHERE id = ? AND user_id = ?
 	`, trader.AIModelID, userID).Scan(
 		&aiModel.ID, &aiModel.UserID, &aiModel.Name, &aiModel.Provider, &aiModel.Enabled, &aiModel.APIKey,
+		&aiModel.CustomAPIURL, &aiModel.CustomModelName,
 		&aiModel.CreatedAt, &aiModel.UpdatedAt,
 	)
 
+	// 如果通过 ID 找不到，尝试通过 provider 查找（兼容旧数据）
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("AI模型配置不存在 (provider: %s, user_id: %s): %v", trader.AIModelID, userID, err)
+		err = d.db.QueryRow(`
+			SELECT id, user_id, name, provider, enabled, api_key,
+			       COALESCE(custom_api_url, '') as custom_api_url,
+			       COALESCE(custom_model_name, '') as custom_model_name,
+			       created_at, updated_at
+			FROM ai_models
+			WHERE provider = ? AND user_id = ?
+		`, trader.AIModelID, userID).Scan(
+			&aiModel.ID, &aiModel.UserID, &aiModel.Name, &aiModel.Provider, &aiModel.Enabled, &aiModel.APIKey,
+			&aiModel.CustomAPIURL, &aiModel.CustomModelName,
+			&aiModel.CreatedAt, &aiModel.UpdatedAt,
+		)
+	}
+
+	// 如果还是找不到，尝试提取后缀作为 provider（例如 "admin_deepseek" -> "deepseek"）
+	if err != nil {
+		if strings.Contains(trader.AIModelID, "_") {
+			parts := strings.Split(trader.AIModelID, "_")
+			lastPart := parts[len(parts)-1]
+			err = d.db.QueryRow(`
+				SELECT id, user_id, name, provider, enabled, api_key,
+				       COALESCE(custom_api_url, '') as custom_api_url,
+				       COALESCE(custom_model_name, '') as custom_model_name,
+				       created_at, updated_at
+				FROM ai_models
+				WHERE (provider = ? OR id = ?) AND user_id = ?
+			`, lastPart, lastPart, userID).Scan(
+				&aiModel.ID, &aiModel.UserID, &aiModel.Name, &aiModel.Provider, &aiModel.Enabled, &aiModel.APIKey,
+				&aiModel.CustomAPIURL, &aiModel.CustomModelName,
+				&aiModel.CreatedAt, &aiModel.UpdatedAt,
+			)
+		}
+	}
+
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("AI模型配置不存在 (ai_model_id: %s, user_id: %s): %v", trader.AIModelID, userID, err)
 	}
 
 	// 获取交易所配置

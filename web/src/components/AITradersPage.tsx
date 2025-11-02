@@ -166,22 +166,46 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
 
     try {
       // 编辑模式下，从 allModels 和 allExchanges 中查找，允许编辑被禁用的配置
-      const model = allModels?.find(m => m.id === data.ai_model_id);
+      let model = allModels?.find(m => m.id === data.ai_model_id);
+
+      // 如果通过 ID 找不到，尝试通过 provider 匹配
+      if (!model && data.ai_model_id) {
+        model = allModels?.find(m =>
+          m.provider === data.ai_model_id ||
+          m.id === data.ai_model_id ||
+          (m.id && m.id.endsWith('_' + data.ai_model_id)) ||
+          (m.id && m.id.split('_').pop() === data.ai_model_id)
+        );
+      }
+
       const exchange = allExchanges?.find(e => e.id === data.exchange_id);
 
       if (!model) {
+        console.error('模型未找到:', {
+          ai_model_id: data.ai_model_id,
+          allModelsIds: allModels?.map(m => ({ id: m.id, provider: m.provider, enabled: m.enabled })),
+          allModelsCount: allModels?.length
+        });
         alert(t('modelConfigNotExist', language));
         return;
       }
 
       if (!exchange) {
+        console.error('交易所未找到:', {
+          exchange_id: data.exchange_id,
+          allExchangesIds: allExchanges?.map(e => ({ id: e.id, enabled: e.enabled })),
+          allExchangesCount: allExchanges?.length
+        });
         alert(t('exchangeConfigNotExist', language));
         return;
       }
 
+      // 如果找到了匹配的模型，使用它的 ID（确保使用正确的ID格式）
+      const finalAIModelId = model.id;
+
       const request = {
         name: data.name,
-        ai_model_id: data.ai_model_id,
+        ai_model_id: finalAIModelId,  // 使用匹配到的模型 ID，而不是可能不匹配的 data.ai_model_id
         exchange_id: data.exchange_id,
         initial_balance: data.initial_balance,
         btc_eth_leverage: data.btc_eth_leverage,
@@ -278,24 +302,50 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
 
   const handleSaveModelConfig = async (modelId: string, apiKey: string, customApiUrl?: string, customModelName?: string) => {
     try {
-      // 找到要配置的模型（从supportedModels中）
-      const modelToUpdate = supportedModels?.find(m => m.id === modelId);
+      // 首先从已配置的模型中查找（编辑模式时使用）
+      let configuredModel = allModels?.find(m => m.id === modelId);
+
+      // 从supportedModels中查找模型
+      let modelToUpdate = supportedModels?.find(m => m.id === modelId);
+
+      // 如果通过ID找不到，尝试通过provider匹配
+      if (!modelToUpdate && configuredModel?.provider) {
+        modelToUpdate = supportedModels?.find(m =>
+          m.provider === configuredModel.provider ||
+          m.id === configuredModel.provider ||
+          (configuredModel.id && m.id === configuredModel.id)
+        );
+      }
+
       if (!modelToUpdate) {
+        console.error('模型不存在:', {
+          modelId,
+          supportedModelsIds: supportedModels?.map(m => m.id),
+          allModelsIds: allModels?.map(m => m.id)
+        });
         alert(t('modelNotExist', language));
         return;
       }
 
       // 创建或更新用户的模型配置
-      const existingModel = allModels?.find(m => m.id === modelId);
+      let existingModel = configuredModel;
+      if (!existingModel && modelToUpdate?.provider) {
+        existingModel = allModels?.find(m =>
+          m.provider === modelToUpdate.provider ||
+          m.id === modelToUpdate.provider ||
+          m.id === modelToUpdate.id
+        );
+      }
+
       let updatedModels;
 
       if (existingModel) {
-        // 更新现有配置
+        // 更新现有配置，保持使用原有的ID
         updatedModels = allModels?.map(m =>
-          m.id === modelId ? { ...m, apiKey, customApiUrl: customApiUrl || '', customModelName: customModelName || '', enabled: true } : m
+          m.id === existingModel!.id ? { ...existingModel!, apiKey, customApiUrl: customApiUrl || '', customModelName: customModelName || '', enabled: true } : m
         ) || [];
       } else {
-        // 添加新配置
+        // 添加新配置，使用modelToUpdate的ID
         const newModel = { ...modelToUpdate, apiKey, customApiUrl: customApiUrl || '', customModelName: customModelName || '', enabled: true };
         updatedModels = [...(allModels || []), newModel];
       }
