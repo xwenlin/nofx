@@ -1,3 +1,4 @@
+import { Zap } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import useSWR from 'swr';
 import AILearning from './components/AILearning';
@@ -5,13 +6,14 @@ import { AITradersPage } from './components/AITradersPage';
 import { CompetitionPage } from './components/CompetitionPage';
 import { EquityChart } from './components/EquityChart';
 import { LoginPage } from './components/LoginPage';
-import { getIconPath } from './components/ModelIcons';
+import { getIconPath, getImagePath } from './components/ModelIcons';
 import { RegisterPage } from './components/RegisterPage';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
 import { useSystemConfig } from './hooks/useSystemConfig';
 import { t, type Language } from './i18n/translations';
 import { api } from './lib/api';
+import { LandingPage } from './pages/LandingPage';
 import type {
   AccountInfo,
   DecisionRecord,
@@ -32,12 +34,6 @@ function getModelDisplayName(modelId: string): string {
       return 'Qwen';
     case 'claude':
       return 'Claude';
-    case 'gpt4':
-    case 'gpt-4':
-      return 'GPT-4';
-    case 'gpt3.5':
-    case 'gpt-3.5':
-      return 'GPT-3.5';
     default:
       return modelId.toUpperCase();
   }
@@ -176,22 +172,23 @@ function App() {
     return (
       <div className="min-h-screen flex items-center justify-center" style={{ background: '#0B0E11' }}>
         <div className="text-center">
-          <div className="w-16 h-16 rounded-full mx-auto mb-4 flex items-center justify-center text-3xl animate-spin"
-            style={{ background: 'linear-gradient(135deg, #F0B90B 0%, #FCD535 100%)' }}>
-            ⚡
-          </div>
+          <img src={getImagePath('logo.png')} alt="NoFx Logo" className="w-16 h-16 mx-auto mb-4 animate-pulse" />
           <p style={{ color: '#EAECEF' }}>{t('loading', language)}</p>
         </div>
       </div>
     );
   }
 
-  // If not in admin mode and not authenticated, show login/register pages
+  // Show landing page for root route when not authenticated
   if (!systemConfig?.admin_mode && (!user || !token)) {
+    if (route === '/login') {
+      return <LoginPage />;
+    }
     if (route === '/register') {
       return <RegisterPage />;
     }
-    return <LoginPage />;
+    // Default to landing page when not authenticated
+    return <LandingPage />;
   }
 
   return (
@@ -265,7 +262,8 @@ function App() {
               {/* Admin Mode Indicator */}
               {systemConfig?.admin_mode && (
                 <div className="flex items-center gap-2 px-3 py-2 rounded" style={{ background: '#1E2329', border: '1px solid #2B3139' }}>
-                  <span className="text-sm font-semibold" style={{ color: '#F0B90B' }}>⚡ {t('adminMode', language)}</span>
+                  <Zap className="w-4 h-4" style={{ color: '#F0B90B' }} />
+                  <span className="text-sm font-semibold" style={{ color: '#F0B90B' }}>{t('adminMode', language)}</span>
                 </div>
               )}
 

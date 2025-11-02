@@ -1,9 +1,10 @@
 import { useState } from 'react';
+import { Trophy, Medal } from 'lucide-react';
 import useSWR from 'swr';
 import { api } from '../lib/api';
 import type { CompetitionData } from '../types';
 import { ComparisonChart } from './ComparisonChart';
-import { TraderConfigModal } from './TraderConfigModal';
+import { TraderConfigViewModal } from './TraderConfigViewModal';
 import { getTraderColor } from '../utils/traderColors';
 import { useLanguage } from '../contexts/LanguageContext';
 import { t } from '../i18n/translations';
@@ -74,11 +75,8 @@ export function CompetitionPage() {
       {/* Competition Header - 精简版 */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl" style={{
-            background: 'linear-gradient(135deg, #F0B90B 0%, #FCD535 100%)',
-            boxShadow: '0 4px 14px rgba(240, 185, 11, 0.4)'
-          }}>
-            🏆
+          <div className="w-12 h-12 rounded-xl flex items-center justify-center" style={{ background: 'rgba(240, 185, 11, 0.15)', border: '1px solid rgba(240,185,11,0.3)' }}>
+            <Trophy className="w-6 h-6" style={{ color: '#F0B90B' }} />
           </div>
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2" style={{ color: '#EAECEF' }}>
@@ -145,8 +143,8 @@ export function CompetitionPage() {
                   <div className="flex items-center justify-between">
                     {/* Rank & Name */}
                     <div className="flex items-center gap-3">
-                      <div className="text-2xl w-6">
-                        {index === 0 ? '🥇' : index === 1 ? '🥈' : '🥉'}
+                      <div className="w-6 flex items-center justify-center">
+                        <Medal className="w-5 h-5" style={{ color: index === 0 ? '#F0B90B' : index === 1 ? '#C0C0C0' : '#CD7F32' }} />
                       </div>
                       <div>
                         <div className="font-bold text-sm" style={{ color: '#EAECEF' }}>{trader.trader_name}</div>
@@ -273,8 +271,8 @@ export function CompetitionPage() {
         </div>
       )}
 
-      {/* Trader Config Modal */}
-      <TraderConfigModal
+      {/* Trader Config View Modal */}
+      <TraderConfigViewModal
         isOpen={isModalOpen}
         onClose={closeModal}
         traderData={selectedTrader}

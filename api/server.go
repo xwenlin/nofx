@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"nofx/auth"
 	"nofx/config"
+	"nofx/decision"
 	"nofx/manager"
 	"strconv"
 	"strings"
@@ -65,12 +66,12 @@ func corsMiddleware() gin.HandlerFunc {
 
 // setupRoutes 设置路由
 func (s *Server) setupRoutes() {
-	// 健康检查
-	s.router.Any("/health", s.handleHealth)
-
 	// API路由组
 	api := s.router.Group("/api")
 	{
+		// 健康检查
+		api.Any("/health", s.handleHealth)
+		
 		// 认证相关路由（无需认证）
 		api.POST("/register", s.handleRegister)
 		api.POST("/login", s.handleLogin)
@@ -83,6 +84,10 @@ func (s *Server) setupRoutes() {
 		
 		// 系统配置（无需认证）
 		api.GET("/config", s.handleGetSystemConfig)
+		
+		// 系统提示词模板管理（无需认证）
+		api.GET("/prompt-templates", s.handleGetPromptTemplates)
+		api.GET("/prompt-templates/:name", s.handleGetPromptTemplate)
 
 		// 需要认证的路由
 		protected := api.Group("/", s.authMiddleware())
@@ -108,6 +113,7 @@ func (s *Server) setupRoutes() {
 			// 用户信号源配置
 			protected.GET("/user/signal-sources", s.handleGetUserSignalSource)
 			protected.POST("/user/signal-sources", s.handleSaveUserSignalSource)
+
 
 			// 竞赛总览
 			protected.GET("/competition", s.handleCompetition)
@@ -200,18 +206,19 @@ func (s *Server) getTraderFromQuery(c *gin.Context) (*manager.TraderManager, str
 
 // AI交易员管理相关结构体
 type CreateTraderRequest struct {
-	Name            string  `json:"name" binding:"required"`
-	AIModelID       string  `json:"ai_model_id" binding:"required"`
-	ExchangeID      string  `json:"exchange_id" binding:"required"`
-	InitialBalance  float64 `json:"initial_balance"`
-	BTCETHLeverage  int     `json:"btc_eth_leverage"`
-	AltcoinLeverage int     `json:"altcoin_leverage"`
-	TradingSymbols  string  `json:"trading_symbols"`
-	CustomPrompt    string  `json:"custom_prompt"`
-	OverrideBasePrompt bool `json:"override_base_prompt"`
-	IsCrossMargin   *bool   `json:"is_cross_margin"` // 指针类型，nil表示使用默认值true
-	UseCoinPool     bool    `json:"use_coin_pool"`
-	UseOITop        bool    `json:"use_oi_top"`
+	Name                 string  `json:"name" binding:"required"`
+	AIModelID            string  `json:"ai_model_id" binding:"required"`
+	ExchangeID           string  `json:"exchange_id" binding:"required"`
+	InitialBalance       float64 `json:"initial_balance"`
+	BTCETHLeverage       int     `json:"btc_eth_leverage"`
+	AltcoinLeverage      int     `json:"altcoin_leverage"`
+	TradingSymbols       string  `json:"trading_symbols"`
+	CustomPrompt         string  `json:"custom_prompt"`
+	OverrideBasePrompt   bool    `json:"override_base_prompt"`
+	SystemPromptTemplate string  `json:"system_prompt_template"` // 系统提示词模板名称
+	IsCrossMargin        *bool   `json:"is_cross_margin"`        // 指针类型，nil表示使用默认值true
+	UseCoinPool          bool    `json:"use_coin_pool"`
+	UseOITop             bool    `json:"use_oi_top"`
 }
 
 type ModelConfig struct {
@@ -319,23 +326,30 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 		}
 	}
 	
+	// 设置系统提示词模板默认值
+	systemPromptTemplate := "default"
+	if req.SystemPromptTemplate != "" {
+		systemPromptTemplate = req.SystemPromptTemplate
+	}
+
     // 创建交易员配置（数据库实体）
     trader := &config.TraderRecord{
-		ID:                  traderID,
-		UserID:              userID,
-		Name:                req.Name,
-		AIModelID:           req.AIModelID,
-		ExchangeID:          req.ExchangeID,
-		InitialBalance:      req.InitialBalance,
-		BTCETHLeverage:      btcEthLeverage,
-		AltcoinLeverage:     altcoinLeverage,
-		TradingSymbols:      req.TradingSymbols,
-		UseCoinPool:         req.UseCoinPool,
-		UseOITop:            req.UseOITop,
-		CustomPrompt:        req.CustomPrompt,
-		OverrideBasePrompt:  req.OverrideBasePrompt,
-		IsCrossMargin:       isCrossMargin,
-		ScanIntervalMinutes: 3, // 默认3分钟
+		ID:                   traderID,
+		UserID:               userID,
+		Name:                 req.Name,
+		AIModelID:            req.AIModelID,
+		ExchangeID:           req.ExchangeID,
+		InitialBalance:       req.InitialBalance,
+		BTCETHLeverage:       btcEthLeverage,
+		AltcoinLeverage:      altcoinLeverage,
+		TradingSymbols:       req.TradingSymbols,
+		UseCoinPool:          req.UseCoinPool,
+		UseOITop:             req.UseOITop,
+		CustomPrompt:         req.CustomPrompt,
+		OverrideBasePrompt:   req.OverrideBasePrompt,
+		SystemPromptTemplate: systemPromptTemplate,
+		IsCrossMargin:        isCrossMargin,
+		ScanIntervalMinutes:  3, // 默认3分钟
 		IsRunning:           false,
 	}
 
@@ -1385,7 +1399,7 @@ func (s *Server) Start() error {
 	addr := fmt.Sprintf(":%d", s.port)
 	log.Printf("🌐 API服务器启动在 http://localhost%s", addr)
 	log.Printf("📊 API文档:")
-	log.Printf("  • GET  /health               - 健康检查")
+	log.Printf("  • GET  /api/health           - 健康检查")
 	log.Printf("  • GET  /api/traders          - AI交易员列表")
 	log.Printf("  • POST /api/traders          - 创建新的AI交易员")
 	log.Printf("  • DELETE /api/traders/:id    - 删除AI交易员")
@@ -1406,4 +1420,38 @@ func (s *Server) Start() error {
 	log.Println()
 
 	return s.router.Run(addr)
+}
+
+// handleGetPromptTemplates 获取所有系统提示词模板列表
+func (s *Server) handleGetPromptTemplates(c *gin.Context) {
+	// 导入 decision 包
+	templates := decision.GetAllPromptTemplates()
+	
+	// 转换为响应格式
+	response := make([]map[string]interface{}, 0, len(templates))
+	for _, tmpl := range templates {
+		response = append(response, map[string]interface{}{
+			"name": tmpl.Name,
+		})
+	}
+	
+	c.JSON(http.StatusOK, gin.H{
+		"templates": response,
+	})
+}
+
+// handleGetPromptTemplate 获取指定名称的提示词模板内容
+func (s *Server) handleGetPromptTemplate(c *gin.Context) {
+	templateName := c.Param("name")
+	
+	template, err := decision.GetPromptTemplate(templateName)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("模板不存在: %s", templateName)})
+		return
+	}
+	
+	c.JSON(http.StatusOK, gin.H{
+		"name":    template.Name,
+		"content": template.Content,
+	})
 }

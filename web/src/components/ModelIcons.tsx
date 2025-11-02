@@ -8,6 +8,12 @@ export const getIconPath = (iconName: string): string => {
   return `${baseUrl}icons/${iconName}`;
 };
 
+// 获取图片路径的工具函数
+export const getImagePath = (imageName: string): string => {
+  const baseUrl = import.meta.env.BASE_URL || '/';
+  return `${baseUrl}images/${imageName}`;
+};
+
 interface IconProps {
   width?: number;
   height?: number;

@@ -1,6 +1,6 @@
 import { useLanguage } from '../contexts/LanguageContext';
 import { t } from '../i18n/translations';
-import { getIconPath } from './ModelIcons';
+import { getImagePath } from './ModelIcons';
 
 interface HeaderProps {
   simple?: boolean; // For login/register pages
@@ -16,7 +16,7 @@ export function Header({ simple = false }: HeaderProps) {
           {/* Left - Logo and Title */}
           <div className="flex items-center gap-3">
             <div className="flex items-center justify-center">
-              <img src={getIconPath('nofx.svg') + '?v=2'} alt="NOFX" className="h-10 w-auto" />
+              <img src={getImagePath('logo.png')} alt="NoFx Logo" className="w-8 h-8" />
             </div>
             <div>
               <h1 className="text-xl font-bold" style={{ color: '#EAECEF' }}>
