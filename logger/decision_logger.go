@@ -335,12 +335,23 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 	// 追踪持仓状态：symbol_side -> {side, openPrice, openTime, quantity, leverage}
 	openPositions := make(map[string]map[string]interface{})
 
-	// 为了避免开仓记录在窗口外导致匹配失败，需要先从所有历史记录中找出未平仓的持仓
-	// 获取更多历史记录来构建完整的持仓状态（使用更大的窗口）
-	allRecords, err := l.GetLatestRecords(lookbackCycles * 3) // 扩大3倍窗口
-	if err == nil && len(allRecords) > len(records) {
-		// 先从扩大的窗口中收集所有开仓记录
-		for _, record := range allRecords {
+	// 为了避免开仓记录在窗口外导致匹配失败，需要从所有历史记录中查找开仓记录
+	// 使用足够大的窗口（10000个周期，约500小时）来查找开仓记录，确保能匹配到所有可能的开仓
+	// 这样即使交易持仓时间很长，也能正确匹配开仓和平仓
+	allRecords, err := l.GetLatestRecords(10000) // 从所有历史记录中查找（最多10000个周期）
+	
+	// 确定分析窗口的起始位置（在allRecords中的索引）
+	// records是分析窗口内的记录（最近的lookbackCycles个周期）
+	// allRecords包含所有历史记录（最多10000个周期），按时间从旧到新排序
+	windowStartIdx := 0
+	if len(allRecords) > len(records) {
+		windowStartIdx = len(allRecords) - len(records)
+	}
+	
+	if err == nil && len(allRecords) > 0 {
+		// 从所有历史记录中收集开仓记录（按时间顺序，从旧到新）
+		// 关键：只删除分析窗口外的平仓记录，保留窗口内的平仓对应的开仓记录
+		for i, record := range allRecords {
 			for _, action := range record.Decisions {
 				if !action.Success {
 					continue
@@ -357,7 +368,7 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 
 				switch action.Action {
 				case "open_long", "open_short":
-					// 记录开仓
+					// 记录开仓（后续的开仓会覆盖之前的，确保使用最新的开仓记录）
 					openPositions[posKey] = map[string]interface{}{
 						"side":      side,
 						"openPrice": action.Price,
@@ -366,8 +377,14 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 						"leverage":  action.Leverage,
 					}
 				case "close_long", "close_short":
-					// 移除已平仓记录
-					delete(openPositions, posKey)
+					// 只删除分析窗口外的平仓记录对应的开仓
+					// 如果平仓在分析窗口外，说明这个交易已经在窗口前完成，不需要保留开仓记录
+					// 如果平仓在分析窗口内，需要保留开仓记录，以便在窗口内匹配
+					if i < windowStartIdx {
+						// 这个平仓在分析窗口外，可以安全删除对应的开仓记录
+						delete(openPositions, posKey)
+					}
+					// 如果平仓在分析窗口内，不删除，保留开仓记录供后续匹配使用
 				}
 			}
 		}
