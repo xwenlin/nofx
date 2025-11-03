@@ -388,6 +388,7 @@ type UpdateTraderRequest struct {
 	TradingSymbols  string  `json:"trading_symbols"`
 	CustomPrompt    string  `json:"custom_prompt"`
 	OverrideBasePrompt bool `json:"override_base_prompt"`
+	SystemPromptTemplate string `json:"system_prompt_template"` // 系统提示词模板名称
 	IsCrossMargin   *bool   `json:"is_cross_margin"`
 }
 
@@ -438,6 +439,12 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 		altcoinLeverage = existingTrader.AltcoinLeverage // 保持原值
 	}
 	
+	// 设置系统提示词模板（如果没有提供，保持原值）
+	systemPromptTemplate := existingTrader.SystemPromptTemplate // 保持原值
+	if req.SystemPromptTemplate != "" {
+		systemPromptTemplate = req.SystemPromptTemplate
+	}
+	
     // 更新交易员配置
     trader := &config.TraderRecord{
 		ID:                  traderID,
@@ -451,6 +458,7 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 		TradingSymbols:      req.TradingSymbols,
 		CustomPrompt:        req.CustomPrompt,
 		OverrideBasePrompt:  req.OverrideBasePrompt,
+		SystemPromptTemplate: systemPromptTemplate,
 		IsCrossMargin:       isCrossMargin,
 		ScanIntervalMinutes: existingTrader.ScanIntervalMinutes, // 保持原值
 		IsRunning:           existingTrader.IsRunning,           // 保持原值
@@ -811,20 +819,21 @@ func (s *Server) handleGetTraderConfig(c *gin.Context) {
 	}
 
 	result := map[string]interface{}{
-		"trader_id":            traderConfig.ID,
-		"trader_name":          traderConfig.Name,
-		"ai_model":             aiModelID,
-		"exchange_id":          traderConfig.ExchangeID,
-		"initial_balance":      traderConfig.InitialBalance,
-		"btc_eth_leverage":     traderConfig.BTCETHLeverage,
-		"altcoin_leverage":     traderConfig.AltcoinLeverage,
-		"trading_symbols":      traderConfig.TradingSymbols,
-		"custom_prompt":        traderConfig.CustomPrompt,
+		"trader_id":             traderConfig.ID,
+		"trader_name":           traderConfig.Name,
+		"ai_model":              aiModelID,
+		"exchange_id":           traderConfig.ExchangeID,
+		"initial_balance":       traderConfig.InitialBalance,
+		"btc_eth_leverage":      traderConfig.BTCETHLeverage,
+		"altcoin_leverage":      traderConfig.AltcoinLeverage,
+		"trading_symbols":       traderConfig.TradingSymbols,
+		"custom_prompt":         traderConfig.CustomPrompt,
 		"override_base_prompt": traderConfig.OverrideBasePrompt,
-		"is_cross_margin":      traderConfig.IsCrossMargin,
-		"use_coin_pool":        traderConfig.UseCoinPool,
-		"use_oi_top":           traderConfig.UseOITop,
-		"is_running":           isRunning,
+		"system_prompt_template": traderConfig.SystemPromptTemplate, // 系统提示词模板名称
+		"is_cross_margin":       traderConfig.IsCrossMargin,
+		"use_coin_pool":         traderConfig.UseCoinPool,
+		"use_oi_top":            traderConfig.UseOITop,
+		"is_running":            isRunning,
 	}
 
 	c.JSON(http.StatusOK, result)

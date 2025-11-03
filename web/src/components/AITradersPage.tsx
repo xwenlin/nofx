@@ -213,6 +213,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
         trading_symbols: data.trading_symbols,
         custom_prompt: data.custom_prompt,
         override_base_prompt: data.override_base_prompt,
+        system_prompt_template: data.system_prompt_template, // 系统提示词模板名称
         is_cross_margin: data.is_cross_margin,
         use_coin_pool: data.use_coin_pool,
         use_oi_top: data.use_oi_top

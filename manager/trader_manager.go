@@ -618,8 +618,10 @@ func (tm *TraderManager) LoadUserTraders(database *config.Database, userID strin
 	// 为每个交易员获取AI模型和交易所配置
 	for _, traderCfg := range traders {
 		// 检查是否已经加载过这个交易员
-		if _, exists := tm.traders[traderCfg.ID]; exists {
-			log.Printf("⚠️ 交易员 %s 已经加载，跳过", traderCfg.Name)
+		if existingTrader, exists := tm.traders[traderCfg.ID]; exists {
+			// 如果已经存在，更新配置（特别是 SystemPromptTemplate）
+			existingTrader.SetSystemPromptTemplate(traderCfg.SystemPromptTemplate)
+			log.Printf("✓ 已更新交易员 %s 的配置（模板: %s）", traderCfg.Name, traderCfg.SystemPromptTemplate)
 			continue
 		}
 

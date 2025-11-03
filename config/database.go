@@ -858,6 +858,7 @@ func (d *Database) GetTraderConfig(userID, traderID string) (*TraderRecord, *AIM
 		       COALESCE(trading_symbols, '') as trading_symbols,
 		       COALESCE(use_coin_pool, 0) as use_coin_pool, COALESCE(use_oi_top, 0) as use_oi_top,
 		       COALESCE(custom_prompt, '') as custom_prompt, COALESCE(override_base_prompt, 0) as override_base_prompt,
+		       COALESCE(system_prompt_template, 'default') as system_prompt_template,
 		       COALESCE(is_cross_margin, 1) as is_cross_margin, created_at, updated_at
 		FROM traders
 		WHERE id = ? AND user_id = ?
@@ -866,7 +867,7 @@ func (d *Database) GetTraderConfig(userID, traderID string) (*TraderRecord, *AIM
 		&trader.InitialBalance, &trader.ScanIntervalMinutes, &trader.IsRunning,
 		&trader.BTCETHLeverage, &trader.AltcoinLeverage, &trader.TradingSymbols,
 		&trader.UseCoinPool, &trader.UseOITop, &trader.CustomPrompt, &trader.OverrideBasePrompt,
-		&trader.IsCrossMargin, &trader.CreatedAt, &trader.UpdatedAt,
+		&trader.SystemPromptTemplate, &trader.IsCrossMargin, &trader.CreatedAt, &trader.UpdatedAt,
 	)
 
 	if err != nil {

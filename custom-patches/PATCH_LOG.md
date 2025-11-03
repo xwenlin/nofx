@@ -4,6 +4,352 @@
 
 ---
 
+## 2025-11-02 - 修复交易员提示词模板更新不生效的问题
+
+### 问题描述
+修改了交易员的系统提示词模板名称（`system_prompt_template`），但修改后没有生效，重启后仍然使用旧的模板。
+
+### 根本原因
+1. **API请求结构体缺少字段**：`UpdateTraderRequest` 中没有 `SystemPromptTemplate` 字段，导致前端传递的模板名称无法被后端接收
+2. **数据库更新不完整**：即使添加了字段，在 `handleUpdateTrader` 中构建 `trader` 对象时也没有设置 `SystemPromptTemplate` 字段
+3. **内存实例未更新**：在 `LoadUserTraders` 中，如果 trader 已经存在于内存中，会直接跳过，不会更新其配置，导致内存中的 trader 实例仍使用旧的模板名称
+4. **前端保存时缺少字段**：在 `AITradersPage.tsx` 的 `handleSaveEditTrader` 函数中，构建 `request` 对象时缺少 `system_prompt_template` 字段，导致编辑交易员时选择的模板没有被提交到后端
+5. **获取配置时缺少字段**：在 `handleGetTraderConfig` 函数中，返回的配置对象中缺少 `system_prompt_template` 字段，导致重新打开编辑界面时无法显示已保存的模板名称
+6. **数据库读取缺少字段**：在 `GetTraderConfig` 方法中，SQL查询语句中没有包含 `system_prompt_template` 字段，导致从数据库读取时该字段为空
+
+### 修改文件
+- `api/server.go`
+- `manager/trader_manager.go`
+- `web/src/components/AITradersPage.tsx`
+- `config/database.go`
+
+### 具体修改
+
+#### 1. 修改 `api/server.go` - 添加 SystemPromptTemplate 字段支持
+
+**修改 `UpdateTraderRequest` 结构体（第380-393行）：**
+
+**修改前：**
+```go
+type UpdateTraderRequest struct {
+	Name            string  `json:"name" binding:"required"`
+	AIModelID       string  `json:"ai_model_id" binding:"required"`
+	ExchangeID      string  `json:"exchange_id" binding:"required"`
+	InitialBalance  float64 `json:"initial_balance"`
+	BTCETHLeverage  int     `json:"btc_eth_leverage"`
+	AltcoinLeverage int     `json:"altcoin_leverage"`
+	TradingSymbols  string  `json:"trading_symbols"`
+	CustomPrompt    string  `json:"custom_prompt"`
+	OverrideBasePrompt bool `json:"override_base_prompt"`
+	IsCrossMargin   *bool   `json:"is_cross_margin"`
+}
+```
+
+**修改后：**
+```go
+type UpdateTraderRequest struct {
+	Name            string  `json:"name" binding:"required"`
+	AIModelID       string  `json:"ai_model_id" binding:"required"`
+	ExchangeID      string  `json:"exchange_id" binding:"required"`
+	InitialBalance  float64 `json:"initial_balance"`
+	BTCETHLeverage  int     `json:"btc_eth_leverage"`
+	AltcoinLeverage int     `json:"altcoin_leverage"`
+	TradingSymbols  string  `json:"trading_symbols"`
+	CustomPrompt    string  `json:"custom_prompt"`
+	OverrideBasePrompt bool `json:"override_base_prompt"`
+	SystemPromptTemplate string `json:"system_prompt_template"` // 系统提示词模板名称
+	IsCrossMargin   *bool   `json:"is_cross_margin"`
+}
+```
+
+**修改 `handleUpdateTrader` 方法（第426-465行）：**
+
+**修改前：**
+```go
+// 设置默认值
+isCrossMargin := existingTrader.IsCrossMargin // 保持原值
+if req.IsCrossMargin != nil {
+	isCrossMargin = *req.IsCrossMargin
+}
+
+// 设置杠杆默认值
+btcEthLeverage := req.BTCETHLeverage
+altcoinLeverage := req.AltcoinLeverage
+if btcEthLeverage <= 0 {
+	btcEthLeverage = existingTrader.BTCETHLeverage // 保持原值
+}
+if altcoinLeverage <= 0 {
+	altcoinLeverage = existingTrader.AltcoinLeverage // 保持原值
+}
+
+// 更新交易员配置
+trader := &config.TraderRecord{
+	ID:                  traderID,
+	UserID:              userID,
+	Name:                req.Name,
+	AIModelID:           req.AIModelID,
+	ExchangeID:          req.ExchangeID,
+	InitialBalance:      req.InitialBalance,
+	BTCETHLeverage:      btcEthLeverage,
+	AltcoinLeverage:     altcoinLeverage,
+	TradingSymbols:      req.TradingSymbols,
+	CustomPrompt:        req.CustomPrompt,
+	OverrideBasePrompt:  req.OverrideBasePrompt,
+	IsCrossMargin:       isCrossMargin,
+	ScanIntervalMinutes: existingTrader.ScanIntervalMinutes, // 保持原值
+	IsRunning:           existingTrader.IsRunning,           // 保持原值
+}
+```
+
+**修改后：**
+```go
+// 设置默认值
+isCrossMargin := existingTrader.IsCrossMargin // 保持原值
+if req.IsCrossMargin != nil {
+	isCrossMargin = *req.IsCrossMargin
+}
+
+// 设置杠杆默认值
+btcEthLeverage := req.BTCETHLeverage
+altcoinLeverage := req.AltcoinLeverage
+if btcEthLeverage <= 0 {
+	btcEthLeverage = existingTrader.BTCETHLeverage // 保持原值
+}
+if altcoinLeverage <= 0 {
+	altcoinLeverage = existingTrader.AltcoinLeverage // 保持原值
+}
+
+// 设置系统提示词模板（如果没有提供，保持原值）
+systemPromptTemplate := existingTrader.SystemPromptTemplate // 保持原值
+if req.SystemPromptTemplate != "" {
+	systemPromptTemplate = req.SystemPromptTemplate
+}
+
+// 更新交易员配置
+trader := &config.TraderRecord{
+	ID:                  traderID,
+	UserID:              userID,
+	Name:                req.Name,
+	AIModelID:           req.AIModelID,
+	ExchangeID:          req.ExchangeID,
+	InitialBalance:      req.InitialBalance,
+	BTCETHLeverage:      btcEthLeverage,
+	AltcoinLeverage:     altcoinLeverage,
+	TradingSymbols:      req.TradingSymbols,
+	CustomPrompt:        req.CustomPrompt,
+	OverrideBasePrompt:  req.OverrideBasePrompt,
+	SystemPromptTemplate: systemPromptTemplate,
+	IsCrossMargin:       isCrossMargin,
+	ScanIntervalMinutes: existingTrader.ScanIntervalMinutes, // 保持原值
+	IsRunning:           existingTrader.IsRunning,           // 保持原值
+}
+```
+
+#### 2. 修改 `manager/trader_manager.go` - 更新已存在的 trader 配置
+
+**修改 `LoadUserTraders` 方法（第618-626行）：**
+
+**修改前：**
+```go
+// 为每个交易员获取AI模型和交易所配置
+for _, traderCfg := range traders {
+	// 检查是否已经加载过这个交易员
+	if _, exists := tm.traders[traderCfg.ID]; exists {
+		log.Printf("⚠️ 交易员 %s 已经加载，跳过", traderCfg.Name)
+		continue
+	}
+```
+
+**修改后：**
+```go
+// 为每个交易员获取AI模型和交易所配置
+for _, traderCfg := range traders {
+	// 检查是否已经加载过这个交易员
+	if existingTrader, exists := tm.traders[traderCfg.ID]; exists {
+		// 如果已经存在，更新配置（特别是 SystemPromptTemplate）
+		existingTrader.SetSystemPromptTemplate(traderCfg.SystemPromptTemplate)
+		log.Printf("✓ 已更新交易员 %s 的配置（模板: %s）", traderCfg.Name, traderCfg.SystemPromptTemplate)
+		continue
+	}
+```
+
+#### 3. 修改 `web/src/components/AITradersPage.tsx` - 修复前端保存时缺少字段
+
+**修改 `handleSaveEditTrader` 函数（第206-220行）：**
+
+**修改前：**
+```typescript
+const request = {
+  name: data.name,
+  ai_model_id: finalAIModelId,
+  exchange_id: data.exchange_id,
+  initial_balance: data.initial_balance,
+  btc_eth_leverage: data.btc_eth_leverage,
+  altcoin_leverage: data.altcoin_leverage,
+  trading_symbols: data.trading_symbols,
+  custom_prompt: data.custom_prompt,
+  override_base_prompt: data.override_base_prompt,
+  is_cross_margin: data.is_cross_margin,
+  use_coin_pool: data.use_coin_pool,
+  use_oi_top: data.use_oi_top
+};
+```
+
+**修改后：**
+```typescript
+const request = {
+  name: data.name,
+  ai_model_id: finalAIModelId,
+  exchange_id: data.exchange_id,
+  initial_balance: data.initial_balance,
+  btc_eth_leverage: data.btc_eth_leverage,
+  altcoin_leverage: data.altcoin_leverage,
+  trading_symbols: data.trading_symbols,
+  custom_prompt: data.custom_prompt,
+  override_base_prompt: data.override_base_prompt,
+  system_prompt_template: data.system_prompt_template, // 系统提示词模板名称
+  is_cross_margin: data.is_cross_margin,
+  use_coin_pool: data.use_coin_pool,
+  use_oi_top: data.use_oi_top
+};
+```
+
+### 修改说明
+1. **添加字段支持**：
+   - 在 `UpdateTraderRequest` 中添加 `SystemPromptTemplate` 字段，允许前端传递模板名称
+   - 在 `handleUpdateTrader` 中处理该字段，如果没有提供则保持原值，如果提供了则更新
+
+2. **数据库更新**：
+   - 确保 `SystemPromptTemplate` 字段被正确保存到数据库
+   - 通过 `UpdateTrader` 方法更新数据库记录
+
+3. **内存实例更新**：
+   - 修改 `LoadUserTraders` 方法，如果 trader 已存在于内存中，更新其 `SystemPromptTemplate` 配置
+   - 这样即使 trader 正在运行，也能立即使用新的模板名称
+
+4. **前端保存修复**：
+   - 在 `handleSaveEditTrader` 函数中添加 `system_prompt_template` 字段到请求对象
+   - 确保前端选择的下拉框值能正确提交到后端
+
+#### 4. 修改 `api/server.go` - 修复返回配置时缺少字段
+
+**修改 `handleGetTraderConfig` 方法（第821-837行）：**
+
+**修改前：**
+```go
+result := map[string]interface{}{
+	"trader_id":            traderConfig.ID,
+	"trader_name":          traderConfig.Name,
+	"ai_model":             aiModelID,
+	"exchange_id":          traderConfig.ExchangeID,
+	"initial_balance":      traderConfig.InitialBalance,
+	"btc_eth_leverage":     traderConfig.BTCETHLeverage,
+	"altcoin_leverage":     traderConfig.AltcoinLeverage,
+	"trading_symbols":      traderConfig.TradingSymbols,
+	"custom_prompt":        traderConfig.CustomPrompt,
+	"override_base_prompt": traderConfig.OverrideBasePrompt,
+	"is_cross_margin":      traderConfig.IsCrossMargin,
+	"use_coin_pool":        traderConfig.UseCoinPool,
+	"use_oi_top":           traderConfig.UseOITop,
+	"is_running":           isRunning,
+}
+```
+
+**修改后：**
+```go
+result := map[string]interface{}{
+	"trader_id":             traderConfig.ID,
+	"trader_name":           traderConfig.Name,
+	"ai_model":              aiModelID,
+	"exchange_id":           traderConfig.ExchangeID,
+	"initial_balance":       traderConfig.InitialBalance,
+	"btc_eth_leverage":      traderConfig.BTCETHLeverage,
+	"altcoin_leverage":      traderConfig.AltcoinLeverage,
+	"trading_symbols":       traderConfig.TradingSymbols,
+	"custom_prompt":         traderConfig.CustomPrompt,
+	"override_base_prompt": traderConfig.OverrideBasePrompt,
+	"system_prompt_template": traderConfig.SystemPromptTemplate, // 系统提示词模板名称
+	"is_cross_margin":       traderConfig.IsCrossMargin,
+	"use_coin_pool":         traderConfig.UseCoinPool,
+	"use_oi_top":            traderConfig.UseOITop,
+	"is_running":            isRunning,
+}
+```
+
+5. **获取配置修复（API层）**：
+   - 在 `handleGetTraderConfig` 函数中添加 `system_prompt_template` 字段到返回对象
+   - 确保重新打开编辑界面时能正确显示已保存的模板名称
+
+#### 5. 修改 `config/database.go` - 修复数据库读取时缺少字段
+
+**修改 `GetTraderConfig` 方法（第855-871行）：**
+
+**修改前：**
+```go
+// 先获取交易员基本信息
+err := d.db.QueryRow(`
+	SELECT id, user_id, name, ai_model_id, exchange_id, initial_balance, scan_interval_minutes, is_running,
+	       COALESCE(btc_eth_leverage, 5) as btc_eth_leverage, COALESCE(altcoin_leverage, 5) as altcoin_leverage,
+	       COALESCE(trading_symbols, '') as trading_symbols,
+	       COALESCE(use_coin_pool, 0) as use_coin_pool, COALESCE(use_oi_top, 0) as use_oi_top,
+	       COALESCE(custom_prompt, '') as custom_prompt, COALESCE(override_base_prompt, 0) as override_base_prompt,
+	       COALESCE(is_cross_margin, 1) as is_cross_margin, created_at, updated_at
+	FROM traders
+	WHERE id = ? AND user_id = ?
+`, traderID, userID).Scan(
+	&trader.ID, &trader.UserID, &trader.Name, &trader.AIModelID, &trader.ExchangeID,
+	&trader.InitialBalance, &trader.ScanIntervalMinutes, &trader.IsRunning,
+	&trader.BTCETHLeverage, &trader.AltcoinLeverage, &trader.TradingSymbols,
+	&trader.UseCoinPool, &trader.UseOITop, &trader.CustomPrompt, &trader.OverrideBasePrompt,
+	&trader.IsCrossMargin, &trader.CreatedAt, &trader.UpdatedAt,
+)
+```
+
+**修改后：**
+```go
+// 先获取交易员基本信息
+err := d.db.QueryRow(`
+	SELECT id, user_id, name, ai_model_id, exchange_id, initial_balance, scan_interval_minutes, is_running,
+	       COALESCE(btc_eth_leverage, 5) as btc_eth_leverage, COALESCE(altcoin_leverage, 5) as altcoin_leverage,
+	       COALESCE(trading_symbols, '') as trading_symbols,
+	       COALESCE(use_coin_pool, 0) as use_coin_pool, COALESCE(use_oi_top, 0) as use_oi_top,
+	       COALESCE(custom_prompt, '') as custom_prompt, COALESCE(override_base_prompt, 0) as override_base_prompt,
+	       COALESCE(system_prompt_template, 'default') as system_prompt_template,
+	       COALESCE(is_cross_margin, 1) as is_cross_margin, created_at, updated_at
+	FROM traders
+	WHERE id = ? AND user_id = ?
+`, traderID, userID).Scan(
+	&trader.ID, &trader.UserID, &trader.Name, &trader.AIModelID, &trader.ExchangeID,
+	&trader.InitialBalance, &trader.ScanIntervalMinutes, &trader.IsRunning,
+	&trader.BTCETHLeverage, &trader.AltcoinLeverage, &trader.TradingSymbols,
+	&trader.UseCoinPool, &trader.UseOITop, &trader.CustomPrompt, &trader.OverrideBasePrompt,
+	&trader.SystemPromptTemplate, &trader.IsCrossMargin, &trader.CreatedAt, &trader.UpdatedAt,
+)
+```
+
+6. **获取配置修复（数据库层）**：
+   - 在 `GetTraderConfig` 方法的 SQL 查询中添加 `system_prompt_template` 字段
+   - 在 `Scan` 语句中添加 `&trader.SystemPromptTemplate` 参数
+   - 确保从数据库读取时能正确获取该字段的值
+
+### 验证要点
+- ✅ 更新交易员配置时，`system_prompt_template` 字段可以被正确接收和保存
+- ✅ 数据库中的 `system_prompt_template` 字段会被正确更新
+- ✅ 从数据库读取时，`system_prompt_template` 字段能被正确读取
+- ✅ 内存中的 trader 实例会立即更新，无需重启
+- ✅ 重新打开编辑界面时，能正确显示已保存的模板名称
+- ✅ 下次 AI 决策时会使用新的模板名称
+
+### 测试建议
+1. 修改交易员的 `system_prompt_template` 字段（例如从 "default" 改为 "nof1"）
+2. 确认前端下拉框选择了新的模板
+3. 点击保存，检查浏览器网络请求，确认请求体中包含 `system_prompt_template` 字段
+4. 确认数据库中的字段已更新
+5. 检查日志，确认内存中的 trader 实例已更新
+6. 等待下一次 AI 决策周期，确认使用了新的模板
+
+---
+
 ## 2025-11-02 - 精简历史表现数据传递（优化AI决策）
 
 ### 问题描述
