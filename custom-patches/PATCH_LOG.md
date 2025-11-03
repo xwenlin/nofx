@@ -4,7 +4,7 @@
 
 ---
 
-## 2025-11-02 - 修复交易员提示词模板更新不生效的问题
+## 2025-11-03 - 修复交易员提示词模板更新不生效的问题
 
 ### 问题描述
 修改了交易员的系统提示词模板名称（`system_prompt_template`），但修改后没有生效，重启后仍然使用旧的模板。
@@ -1340,6 +1340,198 @@ if (!existingModel && modelToUpdate?.provider) {
 2. 新建一个模型配置，应该能够正常保存
 3. 验证不同ID格式（包含前缀和不包含前缀）都能正确匹配
 4. 检查控制台是否有匹配失败的错误日志
+
+---
+
+## 2025-11-01 - 优化前端部署路径配置
+
+### 优化描述
+将前端应用的部署路径设置为 `/nofx/`，同时配置 API 代理路径为 `/nofx-api`，实现前端和后端在同一域名下的子路径部署。
+
+### 优化目的
+1. **支持子路径部署**：允许前端部署在 `/nofx/` 路径下，而不是根路径 `/`
+2. **统一路由管理**：通过 Vite 的 `base` 配置统一管理前端资源路径
+3. **API 代理优化**：通过 Vite 开发服务器的代理功能，将 `/nofx-api` 请求代理到后端的 `/api` 接口
+4. **部署灵活性**：支持将前后端部署在同一域名下，提高部署灵活性
+
+### 修改文件
+- `web/vite.config.ts` - Vite 配置（base 路径和代理配置）
+- `web/src/lib/api.ts` - API 基础路径常量
+- `web/src/lib/config.ts` - 系统配置获取（使用 `/nofx-api/config`）
+- `web/src/contexts/AuthContext.tsx` - 认证相关 API 调用（登录、注册、OTP验证等）
+- `web/src/components/TraderConfigModal.tsx` - 交易员配置相关 API 调用
+- `web/src/components/ModelIcons.tsx` - 静态资源路径工具函数（使用 BASE_URL）
+
+### 具体修改
+
+#### 1. 修改 `web/vite.config.ts` - 添加 base 路径和 API 代理配置
+
+**修改内容（第6行和第10-15行）：**
+
+```typescript
+export default defineConfig({
+  plugins: [react()],
+  base: '/nofx/',  // 设置前端部署基础路径
+  server: {
+    host: '0.0.0.0',
+    port: 3000,
+    proxy: {
+      '/nofx-api': {  // 配置 API 代理路径
+        target: 'http://localhost:18080',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/nofx-api/, '/api'),  // 将 /nofx-api 重写为 /api
+      },
+    },
+  },
+})
+```
+
+#### 2. 修改 `web/src/lib/api.ts` - 统一 API 基础路径
+
+**修改内容（第16行）：**
+
+```typescript
+const API_BASE = '/nofx-api';
+```
+
+**说明**：
+- 所有通过 `api` 对象调用的接口都使用 `API_BASE` 常量
+- 覆盖了交易员管理、模型配置、交易所配置、状态查询等所有主要 API 接口（共30+个接口）
+
+#### 3. 修改 `web/src/lib/config.ts` - 系统配置 API 路径
+
+**修改内容（第15行）：**
+
+```typescript
+configPromise = fetch('/nofx-api/config')
+```
+
+**说明**：
+- 系统配置获取接口统一使用 `/nofx-api/config`
+
+#### 4. 修改 `web/src/contexts/AuthContext.tsx` - 认证相关 API 路径
+
+**修改内容（第63、94、122、155行）：**
+
+```typescript
+// 登录
+const response = await fetch('/nofx-api/login', { ... });
+
+// 注册
+const response = await fetch('/nofx-api/register', { ... });
+
+// OTP 验证
+const response = await fetch('/nofx-api/verify-otp', { ... });
+
+// 完成注册
+const response = await fetch('/nofx-api/complete-registration', { ... });
+```
+
+**说明**：
+- 所有认证相关的 API 调用都统一使用 `/nofx-api` 前缀
+
+#### 5. 修改 `web/src/components/TraderConfigModal.tsx` - 交易员配置相关 API 路径
+
+**修改内容（第132、150行）：**
+
+```typescript
+// 获取系统配置
+const response = await fetch('/nofx-api/config');
+
+// 获取提示词模板列表
+const response = await fetch('/nofx-api/prompt-templates');
+```
+
+**说明**：
+- 交易员配置模态框中的直接 API 调用统一使用 `/nofx-api` 前缀
+
+#### 6. 修改 `web/src/components/ModelIcons.tsx` - 静态资源路径适配 base 路径
+
+**修改内容（第4-15行）：**
+
+```typescript
+// 获取图标路径的工具函数
+// BASE_URL 是 Vite 内置环境变量，自动从 vite.config.ts 的 base 配置中获取
+// 例如 base: '/nofx/' 时，BASE_URL 的值就是 '/nofx/'
+export const getIconPath = (iconName: string): string => {
+  const baseUrl = import.meta.env.BASE_URL || '/';
+  // BASE_URL 通常是 '/nofx/' 这样的格式（以 / 开头和结尾）
+  // 直接拼接即可，不需要移除末尾斜杠
+  return `${baseUrl}icons/${iconName}`;
+};
+
+// 获取图片路径的工具函数
+export const getImagePath = (imageName: string): string => {
+  const baseUrl = import.meta.env.BASE_URL || '/';
+  return `${baseUrl}images/${imageName}`;
+};
+```
+
+**说明**：
+- 使用 `import.meta.env.BASE_URL` 自动适配 base 路径配置
+- 所有静态资源（图片、图标）通过工具函数获取路径，自动添加 `/nofx/` 前缀
+- 影响范围：所有使用 `getImagePath` 和 `getIconPath` 的组件（共10+个文件）
+
+**使用这些工具函数的文件**：
+- `web/src/App.tsx` - Logo 图片和图标
+- `web/src/components/Header.tsx` - Logo 图片
+- `web/src/components/LoginPage.tsx` - Logo 图片
+- `web/src/components/RegisterPage.tsx` - Logo 图片
+- `web/src/components/landing/HeaderBar.tsx` - Logo 图片
+- `web/src/components/landing/FooterSection.tsx` - Logo 图片
+- `web/src/components/landing/HeroSection.tsx` - 主图
+- 以及所有使用模型图标和交易所图标的地方
+
+### 修改说明
+1. **base 路径配置**：
+   - 设置 `base: '/nofx/'`，使前端资源路径基于 `/nofx/` 路径
+   - 所有静态资源（JS、CSS、图片等）都会自动添加 `/nofx/` 前缀
+   - Vite 会自动设置 `import.meta.env.BASE_URL` 为 `/nofx/`
+
+2. **API 代理配置**：
+   - 配置开发服务器代理，将 `/nofx-api` 路径的请求代理到后端
+   - `target: 'http://localhost:18080'` 指定后端服务地址
+   - `rewrite` 规则将 `/nofx-api` 重写为 `/api`，保持后端 API 路径不变
+
+3. **API 路径统一**：
+   - 统一使用 `API_BASE = '/nofx-api'` 常量作为所有 API 调用的基础路径
+   - 所有直接 `fetch` 调用都使用 `/nofx-api` 前缀
+   - 开发环境下通过 Vite 代理转发请求
+   - 生产环境下需要配置反向代理（如 Nginx）将 `/nofx-api` 转发到后端
+
+4. **影响的接口范围**：
+   - 交易员管理：创建、更新、删除、启动、停止、获取配置等
+   - 模型配置：获取、更新模型配置等
+   - 交易所配置：获取、更新交易所配置等
+   - 认证相关：登录、注册、OTP验证等
+   - 系统配置：获取系统配置、提示词模板列表等
+   - 状态查询：账户、持仓、决策、统计等（共30+个接口）
+
+### 相关影响
+- ✅ 前端路由自动适配 `/nofx/` 基础路径
+- ✅ 静态资源路径自动添加 `/nofx/` 前缀
+  - 所有图片（logo.png、main.png）通过 `getImagePath` 自动适配
+  - 所有图标（模型图标、交易所图标）通过 `getIconPath` 自动适配
+  - 共影响10+个组件文件
+- ✅ API 请求路径统一使用 `/nofx-api`，通过代理转发
+- ✅ 支持前后端同域部署，提高部署灵活性
+
+### 生产环境部署建议
+在生产环境中，需要在反向代理（如 Nginx）中配置：
+```nginx
+# 前端静态资源
+location /nofx/ {
+    alias /path/to/web/dist/;
+    try_files $uri $uri/ /nofx/index.html;
+}
+
+# API 代理
+location /nofx-api {
+    proxy_pass http://localhost:18080/api;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+}
+```
 
 ---
 
