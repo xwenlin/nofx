@@ -4,6 +4,23 @@
 
 ---
 
+### 2025-11-03 - 补充修正：WebSocket 启用标志与订阅调用时序
+
+#### 问题
+- 日志显示“组合流WebSocket连接成功”，但随即提示“订阅币种交易对失败: WebSocket未启用，跳过订阅”，导致回退到兼容模式。
+- 原因是 `wsEnabled` 在订阅前仍为 `false`，`subscribeAll()` 先检查标志后直接跳过。
+
+#### 修改
+- `market/monitor.go`
+  - 在 `Start()` 中：WebSocket 连接成功后，先将 `wsEnabled = true`，再执行 `subscribeAll()`。
+  - 在 `subscribeAll()` 中：当 WebSocket 未启用时仅记录日志并 `return nil`，不再返回错误触发降级。
+
+#### 影响
+- ✅ 修复“连接成功但仍降级”的错误时序问题。
+- ✅ 订阅流程与状态标志一致，实时模式能够正常进入。
+
+---
+
 ## 2025-11-03 - 修复前端构建错误（移除未定义的 CardProps 注解）
 
 ### 问题描述

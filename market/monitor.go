@@ -141,6 +141,11 @@ func (m *WSMonitor) Start(coins []string) {
 		return
 	}
 
+	// 连接成功，标记 WebSocket 可用
+	m.mu.Lock()
+	m.wsEnabled = true
+	m.mu.Unlock()
+
 	// 订阅所有交易对
 	err = m.subscribeAll()
 	if err != nil {
@@ -152,11 +157,6 @@ func (m *WSMonitor) Start(coins []string) {
 		m.combinedClient.Close()
 		return
 	}
-
-	// 成功启动WebSocket
-	m.mu.Lock()
-	m.wsEnabled = true
-	m.mu.Unlock()
 	log.Printf("✅ WebSocket实时监控已启动（实时模式）")
 }
 
@@ -186,7 +186,8 @@ func (m *WSMonitor) subscribeAll() error {
 	m.mu.RUnlock()
 
 	if !wsEnabled {
-		return fmt.Errorf("WebSocket未启用，跳过订阅")
+		log.Printf("⚠️  WebSocket未启用，跳过订阅")
+		return nil
 	}
 
 	// 执行批量订阅
