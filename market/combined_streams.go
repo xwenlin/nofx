@@ -31,13 +31,31 @@ func NewCombinedStreamsClient(batchSize int) *CombinedStreamsClient {
 
 func (c *CombinedStreamsClient) Connect() error {
 	dialer := websocket.Dialer{
-		HandshakeTimeout: 10 * time.Second,
+		HandshakeTimeout: 30 * time.Second, // 增加超时时间从10秒到30秒
 	}
 
 	// 组合流使用不同的端点
-	conn, _, err := dialer.Dial("wss://fstream.binance.com/stream", nil)
+	// 尝试连接，如果失败，等待后重试
+	var conn *websocket.Conn
+	var err error
+	maxRetries := 3
+	for i := 0; i < maxRetries; i++ {
+		if i > 0 {
+			waitTime := time.Duration(i) * 2 * time.Second
+			log.Printf("WebSocket连接失败，%v后重试 (%d/%d)...", waitTime, i+1, maxRetries)
+			time.Sleep(waitTime)
+		}
+		
+		conn, _, err = dialer.Dial("wss://fstream.binance.com/stream", nil)
+		if err == nil {
+			break
+		}
+		
+		log.Printf("WebSocket连接尝试失败 (%d/%d): %v", i+1, maxRetries, err)
+	}
+	
 	if err != nil {
-		return fmt.Errorf("组合流WebSocket连接失败: %v", err)
+		return fmt.Errorf("组合流WebSocket连接失败（已重试%d次）: %v", maxRetries, err)
 	}
 
 	c.mu.Lock()

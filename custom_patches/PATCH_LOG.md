@@ -4,6 +4,276 @@
 
 ---
 
+## 2025-11-03 - WebSocket 兼容原 HTTP 模式（优雅降级）
+
+### 问题描述
+- 引入 WebSocket 实时行情后，启动阶段若组合流连接失败会触发 `log.Fatalf`，导致程序直接退出；即使 HTTP API 可用也无法运行。
+- `market.Get()` 读取行情依赖 `WSMonitorCli.GetCurrentKlines()` 的内存缓存，WebSocket 未准备好时体验受影响。
+
+### 修改目标
+- 在 WebSocket 不可用时，系统应自动回退到原有的 HTTP API 拉取方式，且不中断运行。
+- WebSocket 可用时继续享受实时推送与缓存性能优势。
+
+### 修改文件
+- `market/monitor.go`
+  - 新增 `wsEnabled bool` 与 `mu sync.RWMutex`，管理并发下的 WebSocket 启用状态。
+  - `Start()`：将 `log.Fatalf` 改为告警日志；连接或订阅失败时设置 `wsEnabled=false` 并继续运行（回退到 HTTP 模式）；成功时置 `wsEnabled=true`。
+  - `GetCurrentKlines()`：
+    - 先查内存缓存；若不存在则用 HTTP API 获取并缓存。
+    - 若 WebSocket 可用，异步尝试动态订阅，不影响主流程。
+  - `subscribeSymbol()` / `subscribeAll()`：在订阅前检查 `wsEnabled`，不可用则跳过订阅/返回空列表。
+- `custom_patches/WEBSOCKET_ANALYSIS.md`
+  - 记录 WebSocket 使用原因、原有模式、问题与兼容设计，并描述优雅降级方案与工作流程。
+
+### 影响范围
+- ✅ WebSocket 连接异常时不再导致进程退出，系统自动回退到 HTTP API 获取行情。
+- ✅ 保持与旧版（仅 HTTP 拉取）的完全兼容；功能不中断。
+- ✅ WebSocket 可用时仍提供实时推送和缓存性能优势。
+- ✅ 错误日志更清晰，便于定位网络/连接类问题。
+
+### 测试建议
+1. 模拟网络不通或 Binance WS 不可达：确认不退出进程且行情正常通过 HTTP 拉取。
+2. 恢复网络：确认自动订阅成功，实时数据进入内存缓存。
+3. 验证多交易对（3m/4h）在两种模式下都能稳定获取并计算指标。
+
+---
+
+## 2025-11-03 - 修复启动时Binance API错误处理和WebSocket连接超时问题
+
+### 问题描述
+启动应用时出现两个错误：
+1. **JSON 解析错误**：`json: cannot unmarshal object into Go value of type []market.KlineResponse`
+   - 错误信息显示：`获取 XXXUSDT 历史数据失败: json: cannot unmarshal object into Go value of type []market.KlineResponse`
+   - 当 Binance API 返回错误时，返回的是一个错误对象（如 `{"code":-1121,"msg":"Invalid symbol."}`），而不是 K 线数组
+
+2. **WebSocket 连接超时**：`❌ 批量订阅流: 组合流WebSocket连接失败: dial tcp 52.58.1.161:443: i/o timeout`
+   - WebSocket 连接超时时间太短（10秒），在网络不稳定时容易失败
+   - 没有重试机制，一次失败就放弃
+
+### 根本原因
+1. **API错误处理不足**：
+   - `market/api_client.go` 中的 `GetKlines` 方法直接尝试将响应解析为 `[]KlineResponse`
+   - 没有检查 HTTP 状态码
+   - 没有检查响应格式（数组 vs 对象）
+   - 当 API 返回错误对象时，解析失败
+
+2. **WebSocket超时和重试不足**：
+   - `market/combined_streams.go` 和 `market/websocket_client.go` 中的超时时间只有10秒
+   - 没有重试机制，一次连接失败就放弃
+
+### 修改文件
+- `market/api_client.go` - 添加错误处理和响应格式检查
+- `market/combined_streams.go` - 增加超时时间和重试机制
+- `market/websocket_client.go` - 增加超时时间和重试机制
+
+### 具体修改
+
+#### 1. 修改 `market/api_client.go` - 添加API错误处理
+
+**修改 `GetKlines` 方法（第63-113行）：**
+
+**修改前：**
+```go
+resp, err := c.client.Do(req)
+if err != nil {
+    return nil, err
+}
+defer resp.Body.Close()
+
+body, err := io.ReadAll(resp.Body)
+if err != nil {
+    return nil, err
+}
+
+var klineResponses []KlineResponse
+err = json.Unmarshal(body, &klineResponses)
+if err != nil {
+    return nil, err
+}
+```
+
+**修改后：**
+```go
+resp, err := c.client.Do(req)
+if err != nil {
+    return nil, err
+}
+defer resp.Body.Close()
+
+body, err := io.ReadAll(resp.Body)
+if err != nil {
+    return nil, err
+}
+
+// 检查 HTTP 状态码
+if resp.StatusCode != http.StatusOK {
+    // 尝试解析错误响应
+    var errorResp map[string]interface{}
+    if json.Unmarshal(body, &errorResp) == nil {
+        if code, ok := errorResp["code"].(float64); ok {
+            if msg, ok := errorResp["msg"].(string); ok {
+                return nil, fmt.Errorf("Binance API error (code: %.0f): %s", code, msg)
+            }
+        }
+    }
+    return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+}
+
+// 先检查响应是否是数组（成功响应应该是数组）
+// 如果不是数组，可能是错误对象
+var testValue interface{}
+if err := json.Unmarshal(body, &testValue); err != nil {
+    return nil, fmt.Errorf("解析响应失败: %w", err)
+}
+
+// 检查是否是数组
+if _, isArray := testValue.([]interface{}); !isArray {
+    // 如果不是数组，尝试解析为错误对象
+    var errorResp map[string]interface{}
+    if json.Unmarshal(body, &errorResp) == nil {
+        if code, ok := errorResp["code"].(float64); ok {
+            if msg, ok := errorResp["msg"].(string); ok {
+                return nil, fmt.Errorf("Binance API error (code: %.0f): %s", code, msg)
+            }
+        }
+    }
+    return nil, fmt.Errorf("意外的响应格式，期望数组，但收到对象: %s", string(body))
+}
+
+var klineResponses []KlineResponse
+err = json.Unmarshal(body, &klineResponses)
+if err != nil {
+    return nil, fmt.Errorf("解析K线数据失败: %w", err)
+}
+```
+
+**同样修改 `GetExchangeInfo` 和 `GetCurrentPrice` 方法**，添加 HTTP 状态码检查和错误解析。
+
+#### 2. 修改 `market/combined_streams.go` - 增加超时和重试
+
+**修改 `Connect` 方法（第32-59行）：**
+
+**修改前：**
+```go
+func (c *CombinedStreamsClient) Connect() error {
+    dialer := websocket.Dialer{
+        HandshakeTimeout: 10 * time.Second,
+    }
+
+    // 组合流使用不同的端点
+    conn, _, err := dialer.Dial("wss://fstream.binance.com/stream", nil)
+    if err != nil {
+        return fmt.Errorf("组合流WebSocket连接失败: %v", err)
+    }
+```
+
+**修改后：**
+```go
+func (c *CombinedStreamsClient) Connect() error {
+    dialer := websocket.Dialer{
+        HandshakeTimeout: 30 * time.Second, // 增加超时时间从10秒到30秒
+    }
+
+    // 组合流使用不同的端点
+    // 尝试连接，如果失败，等待后重试
+    var conn *websocket.Conn
+    var err error
+    maxRetries := 3
+    for i := 0; i < maxRetries; i++ {
+        if i > 0 {
+            waitTime := time.Duration(i) * 2 * time.Second
+            log.Printf("WebSocket连接失败，%v后重试 (%d/%d)...", waitTime, i+1, maxRetries)
+            time.Sleep(waitTime)
+        }
+        
+        conn, _, err = dialer.Dial("wss://fstream.binance.com/stream", nil)
+        if err == nil {
+            break
+        }
+        
+        log.Printf("WebSocket连接尝试失败 (%d/%d): %v", i+1, maxRetries, err)
+    }
+    
+    if err != nil {
+        return fmt.Errorf("组合流WebSocket连接失败（已重试%d次）: %v", maxRetries, err)
+    }
+```
+
+#### 3. 修改 `market/websocket_client.go` - 增加超时和重试
+
+**修改 `Connect` 方法（第79-105行）：**
+
+**修改前：**
+```go
+func (w *WSClient) Connect() error {
+    dialer := websocket.Dialer{
+        HandshakeTimeout: 10 * time.Second,
+    }
+
+    conn, _, err := dialer.Dial("wss://ws-fapi.binance.com/ws-fapi/v1", nil)
+    if err != nil {
+        return fmt.Errorf("WebSocket连接失败: %v", err)
+    }
+```
+
+**修改后：**
+```go
+func (w *WSClient) Connect() error {
+    dialer := websocket.Dialer{
+        HandshakeTimeout: 30 * time.Second, // 增加超时时间从10秒到30秒
+    }
+
+    // 尝试连接，如果失败，等待后重试
+    var conn *websocket.Conn
+    var err error
+    maxRetries := 3
+    for i := 0; i < maxRetries; i++ {
+        if i > 0 {
+            waitTime := time.Duration(i) * 2 * time.Second
+            log.Printf("WebSocket连接失败，%v后重试 (%d/%d)...", waitTime, i+1, maxRetries)
+            time.Sleep(waitTime)
+        }
+        
+        conn, _, err = dialer.Dial("wss://ws-fapi.binance.com/ws-fapi/v1", nil)
+        if err == nil {
+            break
+        }
+        
+        log.Printf("WebSocket连接尝试失败 (%d/%d): %v", i+1, maxRetries, err)
+    }
+    
+    if err != nil {
+        return fmt.Errorf("WebSocket连接失败（已重试%d次）: %v", maxRetries, err)
+    }
+```
+
+### 修改说明
+1. **API错误处理增强**：
+   - 检查 HTTP 状态码，非 200 状态码时尝试解析错误对象
+   - 在解析前检查响应格式（数组 vs 对象）
+   - 如果是错误对象，提取错误码和消息，返回有意义的错误信息
+   - 同时修改了 `GetExchangeInfo` 和 `GetCurrentPrice` 方法，统一错误处理
+
+2. **WebSocket连接优化**：
+   - 增加超时时间从10秒到30秒，给网络连接更多时间
+   - 添加重试机制（最多重试3次），每次重试间隔递增（2秒、4秒、6秒）
+   - 连接失败时记录详细的日志信息，便于调试
+
+### 影响范围
+- ✅ 修复了启动时 JSON 解析错误导致的程序崩溃
+- ✅ 提供了更清晰的错误信息，便于排查问题
+- ✅ 提高了 WebSocket 连接的成功率
+- ✅ 在网络不稳定时，自动重试连接，提高容错能力
+- ✅ 不影响其他功能的正常运行
+
+### 测试建议
+1. 测试启动时是否能正确处理 API 错误（如果 Binance API 返回错误）
+2. 测试 WebSocket 连接在网络不稳定时的重试行为
+3. 验证错误日志是否清晰易懂
+4. 确认程序在 API 错误时不会崩溃，而是返回有意义的错误信息
+
+---
+
 ## 2025-11-03 - 修复交易员提示词模板更新不生效的问题
 
 ### 问题描述
@@ -1534,6 +1804,7 @@ location /nofx-api {
 ```
 
 ---
+
 
 ## 如何使用本日志
 

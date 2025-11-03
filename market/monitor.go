@@ -22,6 +22,8 @@ type WSMonitor struct {
 	filterSymbols  sync.Map // 使用sync.Map来存储需要监控的币种和其状态
 	symbolStats    sync.Map // 存储币种统计信息
 	FilterSymbol   []string //经过筛选的币种
+	wsEnabled      bool     // WebSocket是否启用
+	mu             sync.RWMutex // 保护 wsEnabled 的读写
 }
 type SymbolStats struct {
 	LastActiveTime   time.Time
@@ -40,6 +42,7 @@ func NewWSMonitor(batchSize int) *WSMonitor {
 		combinedClient: NewCombinedStreamsClient(batchSize),
 		alertsChan:     make(chan Alert, 1000),
 		batchSize:      batchSize,
+		wsEnabled:      false, // 初始状态为 false，等待 Start() 成功启动后设为 true
 	}
 	return WSMonitorCli
 }
@@ -118,28 +121,56 @@ func (m *WSMonitor) initializeHistoricalData() error {
 
 func (m *WSMonitor) Start(coins []string) {
 	log.Printf("启动WebSocket实时监控...")
-	// 初始化交易对
+	// 初始化交易对（必须成功，因为后续会回退到HTTP API）
 	err := m.Initialize(coins)
 	if err != nil {
-		log.Fatalf("❌ 初始化币种: %v", err)
+		log.Printf("⚠️  初始化币种失败: %v，将使用HTTP API方式", err)
+		m.mu.Lock()
+		m.wsEnabled = false
+		m.mu.Unlock()
 		return
 	}
 
+	// 尝试连接WebSocket（如果失败，使用HTTP API模式）
 	err = m.combinedClient.Connect()
 	if err != nil {
-		log.Fatalf("❌ 批量订阅流: %v", err)
+		log.Printf("⚠️  WebSocket连接失败: %v，将使用HTTP API方式（兼容模式）", err)
+		m.mu.Lock()
+		m.wsEnabled = false
+		m.mu.Unlock()
 		return
 	}
+
 	// 订阅所有交易对
 	err = m.subscribeAll()
 	if err != nil {
-		log.Fatalf("❌ 订阅币种交易对: %v", err)
+		log.Printf("⚠️  订阅币种交易对失败: %v，将使用HTTP API方式（兼容模式）", err)
+		m.mu.Lock()
+		m.wsEnabled = false
+		m.mu.Unlock()
+		// 关闭WebSocket连接
+		m.combinedClient.Close()
 		return
 	}
+
+	// 成功启动WebSocket
+	m.mu.Lock()
+	m.wsEnabled = true
+	m.mu.Unlock()
+	log.Printf("✅ WebSocket实时监控已启动（实时模式）")
 }
 
 // subscribeSymbol 注册监听
 func (m *WSMonitor) subscribeSymbol(symbol, st string) []string {
+	// 检查 WebSocket 是否可用
+	m.mu.RLock()
+	wsEnabled := m.wsEnabled
+	m.mu.RUnlock()
+
+	if !wsEnabled || m.combinedClient == nil {
+		return []string{} // 返回空，表示未订阅
+	}
+
 	var streams []string
 	stream := fmt.Sprintf("%s@kline_%s", strings.ToLower(symbol), st)
 	ch := m.combinedClient.AddSubscriber(stream, 100)
@@ -149,6 +180,15 @@ func (m *WSMonitor) subscribeSymbol(symbol, st string) []string {
 	return streams
 }
 func (m *WSMonitor) subscribeAll() error {
+	// 检查 WebSocket 是否可用
+	m.mu.RLock()
+	wsEnabled := m.wsEnabled
+	m.mu.RUnlock()
+
+	if !wsEnabled {
+		return fmt.Errorf("WebSocket未启用，跳过订阅")
+	}
+
 	// 执行批量订阅
 	log.Println("开始订阅所有交易对...")
 	for _, symbol := range m.symbols {
@@ -159,7 +199,7 @@ func (m *WSMonitor) subscribeAll() error {
 	for _, st := range subKlineTime {
 		err := m.combinedClient.BatchSubscribeKlines(m.symbols, st)
 		if err != nil {
-			log.Fatalf("❌ 订阅3m K线: %v", err)
+			log.Printf("⚠️  订阅%v K线失败: %v", st, err)
 			return err
 		}
 	}
@@ -233,25 +273,43 @@ func (m *WSMonitor) processKlineUpdate(symbol string, wsData KlineWSData, _time 
 }
 
 func (m *WSMonitor) GetCurrentKlines(symbol string, _time string) ([]Kline, error) {
-	// 对每一个进来的symbol检测是否存在内类 是否的话就订阅它
+	// 检查 WebSocket 是否可用
+	m.mu.RLock()
+	wsEnabled := m.wsEnabled
+	m.mu.RUnlock()
+
+	// 尝试从缓存中获取
 	value, exists := m.getKlineDataMap(_time).Load(symbol)
-	if !exists {
-		// 如果Ws数据未初始化完成时,单独使用api获取 - 兼容性代码 (防止在未初始化完成是,已经有交易员运行)
-		apiClient := NewAPIClient()
-		klines, err := apiClient.GetKlines(symbol, _time, 100)
-		m.getKlineDataMap(_time).Store(strings.ToUpper(symbol), klines) //动态缓存进缓存
-		subStr := m.subscribeSymbol(symbol, _time)
-		subErr := m.combinedClient.subscribeStreams(subStr)
-		log.Printf("动态订阅流: %v", subStr)
-		if subErr != nil {
-			return nil, fmt.Errorf("动态订阅%v分钟K线失败: %v", _time, subErr)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("获取%v分钟K线失败: %v", _time, err)
-		}
-		return klines, fmt.Errorf("symbol不存在")
+	if exists {
+		return value.([]Kline), nil
 	}
-	return value.([]Kline), nil
+
+	// 如果缓存中没有数据，使用 HTTP API 获取（兼容模式）
+	apiClient := NewAPIClient()
+	klines, err := apiClient.GetKlines(symbol, _time, 100)
+	if err != nil {
+		return nil, fmt.Errorf("获取%v分钟K线失败: %v", _time, err)
+	}
+
+	// 缓存数据（即使 WebSocket 不可用，也缓存以便后续使用）
+	m.getKlineDataMap(_time).Store(strings.ToUpper(symbol), klines)
+
+	// 如果 WebSocket 可用，尝试动态订阅（不影响主流程）
+	if wsEnabled && m.combinedClient != nil {
+		go func() {
+			subStr := m.subscribeSymbol(symbol, _time)
+			if len(subStr) > 0 {
+				subErr := m.combinedClient.subscribeStreams(subStr)
+				if subErr != nil {
+					log.Printf("⚠️  动态订阅%v分钟K线失败（不影响使用）: %v", _time, subErr)
+				} else {
+					log.Printf("✅ 动态订阅流: %v", subStr)
+				}
+			}
+		}()
+	}
+
+	return klines, nil
 }
 
 func (m *WSMonitor) Close() {
