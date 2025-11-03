@@ -4,6 +4,23 @@
 
 ---
 
+## 2025-11-03 - 修复前端构建错误（移除未定义的 CardProps 注解）
+
+### 问题描述
+- 执行 `npm run build` 报错：`TS2304: Cannot find name 'CardProps'`。
+- 位置：`web/src/components/landing/CommunitySection.tsx:32` 使用了未定义/未导入的 `CardProps` 类型。
+
+### 修改文件
+- `web/src/components/landing/CommunitySection.tsx`
+  - 将 `const items: CardProps[] = [` 修改为 `const items = [`，交由 TypeScript 根据字面量自动类型推断，快速消除构建错误。
+
+### 影响范围
+- ✅ 解决构建时报错，登陆页模块可正常编译。
+- ⚠️ 如需统一复用卡片类型，可在后续将公共 `Card` 组件的 Props 类型导出并在此处按需导入。
+- ⚠️ 如缺少 `framer-motion` 依赖，需执行 `npm i framer-motion` 后再构建。
+
+---
+
 ## 2025-11-03 - WebSocket 兼容原 HTTP 模式（优雅降级）
 
 ### 问题描述
