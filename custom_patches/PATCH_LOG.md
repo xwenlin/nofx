@@ -1579,19 +1579,6 @@ const handleSaveModelConfig = async (modelId: string, apiKey: string, customApiU
       );
     }
     
-    // 如果还是找不到，尝试在supportedModels中查找任何匹配的模型
-    if (!modelToUpdate) {
-      // 尝试通过ID的后缀匹配（例如 "admin_deepseek" 匹配 "deepseek"）
-      const modelIdParts = modelId.split('_');
-      const lastPart = modelIdParts[modelIdParts.length - 1];
-      modelToUpdate = supportedModels?.find(m => 
-        m.id === lastPart || 
-        m.id === modelId || 
-        m.provider === lastPart ||
-        m.provider === modelId
-      );
-    }
-    
     if (!modelToUpdate) {
       console.error('模型不存在:', { 
         modelId, 
