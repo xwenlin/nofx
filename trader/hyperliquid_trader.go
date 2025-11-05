@@ -478,7 +478,8 @@ func (t *HyperliquidTrader) CloseShort(symbol string, quantity float64) (map[str
 }
 
 // CancelAllOrders 取消该币种的所有挂单
-func (t *HyperliquidTrader) CancelAllOrders(symbol string) error {
+// positionSide: 可选参数，Hyperliquid不支持PositionSide，此参数会被忽略
+func (t *HyperliquidTrader) CancelAllOrders(symbol string, positionSide ...string) error {
 	coin := convertSymbolToHyperliquid(symbol)
 
 	// 获取所有挂单
@@ -488,6 +489,7 @@ func (t *HyperliquidTrader) CancelAllOrders(symbol string) error {
 	}
 
 	// 取消该币种的所有挂单
+	// 注意：Hyperliquid不支持PositionSide，取消所有该币种的订单
 	for _, order := range openOrders {
 		if order.Coin == coin {
 			_, err := t.exchange.Cancel(t.ctx, coin, order.Oid)
@@ -497,7 +499,11 @@ func (t *HyperliquidTrader) CancelAllOrders(symbol string) error {
 		}
 	}
 
-	log.Printf("  ✓ 已取消 %s 的所有挂单", symbol)
+	if len(positionSide) > 0 && positionSide[0] != "" {
+		log.Printf("  ✓ 取消 %s 的 %s 方向挂单（Hyperliquid不支持PositionSide，已取消所有订单）", symbol, positionSide[0])
+	} else {
+		log.Printf("  ✓ 已取消 %s 的所有挂单", symbol)
+	}
 	return nil
 }
 

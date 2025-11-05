@@ -13,35 +13,45 @@ type Data struct {
 	CurrentRSI7       float64
 	OpenInterest      *OIData
 	FundingRate       float64
-	IntradaySeries    *IntradayData
+	IntradaySeries    *IntradayData // 3分钟序列
+	Series15m         *IntradayData // 15分钟序列
+	Series1h          *IntradayData // 1小时序列
 	LongerTermContext *LongerTermData
 }
 
 // OIData Open Interest数据
 type OIData struct {
-	Latest  float64
-	Average float64
+	Latest      float64
+	Average     float64
+	DeltaPercent float64 // OI变化百分比（用于判断>+5%）
 }
 
-// IntradayData 日内数据(3分钟间隔)
+// IntradayData 日内数据(3分钟/15分钟/1小时间隔)
 type IntradayData struct {
-	MidPrices   []float64
-	EMA20Values []float64
-	MACDValues  []float64
-	RSI7Values  []float64
-	RSI14Values []float64
+	MidPrices      []float64
+	EMA20Values    []float64
+	MACDValues     []float64
+	RSI7Values     []float64
+	RSI14Values    []float64
+	Volumes        []float64 // 成交量序列
+	BuySellRatios  []float64 // 买卖压力比序列（TakerBuyBaseVolume / Volume）
 }
 
 // LongerTermData 长期数据(4小时时间框架)
 type LongerTermData struct {
-	EMA20         float64
-	EMA50         float64
+	EMA20         float64   // 当前EMA20值（保留，用于兼容）
+	EMA50         float64   // 当前EMA50值
 	ATR3          float64
 	ATR14         float64
-	CurrentVolume float64
-	AverageVolume float64
+	CurrentVolume float64   // 当前成交量（保留，用于兼容）
+	AverageVolume float64   // 平均成交量（保留，用于兼容）
+	MidPrices     []float64 // 4小时价格序列
+	EMA20Values   []float64 // EMA20序列（新增）
 	MACDValues    []float64
+	RSI7Values    []float64 // RSI7序列（提示词要求）
 	RSI14Values   []float64
+	Volumes       []float64 // 成交量序列（新增）
+	BuySellRatios []float64 // 买卖压力比序列（新增）
 }
 
 // Binance API 响应结构
@@ -139,7 +149,7 @@ type CleanupConfig struct {
 	CheckInterval     time.Duration `json:"check_interval"`      // 检查间隔
 }
 
-var config = Config{
+var _ = Config{
 	AlertThresholds: AlertThresholds{
 		VolumeSpike:      3.0,
 		PriceChange15Min: 0.05,

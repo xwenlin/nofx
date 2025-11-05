@@ -53,7 +53,7 @@ func (t *FuturesTrader) GetBalance() (map[string]interface{}, error) {
 
 	// 缓存过期或不存在，调用API（带重试机制）
 	log.Printf("🔄 缓存过期，正在调用币安API获取账户余额...")
-	
+
 	// 重试机制：专门处理时间戳错误
 	maxRetries := 3
 	var lastErr error
@@ -65,16 +65,16 @@ func (t *FuturesTrader) GetBalance() (map[string]interface{}, error) {
 			log.Printf("⚠️  币安API调用失败，等待%v后重试 (%d/%d)...", waitTime, attempt, maxRetries)
 			time.Sleep(waitTime)
 		}
-		
+
 		acc, err := t.client.NewGetAccountService().Do(context.Background())
 		if err == nil {
 			account = acc
 			break
 		}
-		
+
 		lastErr = err
 		errStr := err.Error()
-		
+
 		// 检查是否是时间戳错误（-1021）
 		if strings.Contains(errStr, "-1021") || strings.Contains(errStr, "outside of the recvWindow") || strings.Contains(errStr, "Timestamp") {
 			log.Printf("⚠️  检测到时间戳错误，将在重试时生成新的时间戳")
@@ -82,12 +82,12 @@ func (t *FuturesTrader) GetBalance() (map[string]interface{}, error) {
 				continue // 重试
 			}
 		}
-		
+
 		// 其他错误不重试，直接返回
 		log.Printf("❌ 币安API调用失败: %v", err)
 		return nil, fmt.Errorf("获取账户信息失败: %w", err)
 	}
-	
+
 	// 如果所有重试都失败
 	if account == nil {
 		return nil, fmt.Errorf("获取账户信息失败（已重试%d次）: %w", maxRetries, lastErr)
@@ -127,7 +127,7 @@ func (t *FuturesTrader) GetPositions() ([]map[string]interface{}, error) {
 
 	// 缓存过期或不存在，调用API（带重试机制）
 	log.Printf("🔄 缓存过期，正在调用币安API获取持仓信息...")
-	
+
 	// 重试机制：专门处理时间戳错误
 	maxRetries := 3
 	var lastErr error
@@ -139,16 +139,16 @@ func (t *FuturesTrader) GetPositions() ([]map[string]interface{}, error) {
 			log.Printf("⚠️  币安API调用失败，等待%v后重试 (%d/%d)...", waitTime, attempt, maxRetries)
 			time.Sleep(waitTime)
 		}
-		
+
 		pos, err := t.client.NewGetPositionRiskService().Do(context.Background())
 		if err == nil {
 			positions = pos
 			break
 		}
-		
+
 		lastErr = err
 		errStr := err.Error()
-		
+
 		// 检查是否是时间戳错误（-1021）
 		if strings.Contains(errStr, "-1021") || strings.Contains(errStr, "outside of the recvWindow") || strings.Contains(errStr, "Timestamp") {
 			log.Printf("⚠️  检测到时间戳错误，将在重试时生成新的时间戳")
@@ -156,11 +156,11 @@ func (t *FuturesTrader) GetPositions() ([]map[string]interface{}, error) {
 				continue // 重试
 			}
 		}
-		
+
 		// 其他错误不重试，直接返回
 		return nil, fmt.Errorf("获取持仓失败: %w", err)
 	}
-	
+
 	if lastErr != nil && len(positions) == 0 {
 		return nil, fmt.Errorf("获取持仓失败（已重试%d次）: %w", maxRetries, lastErr)
 	}
@@ -481,7 +481,58 @@ func (t *FuturesTrader) CloseShort(symbol string, quantity float64) (map[string]
 }
 
 // CancelAllOrders 取消该币种的所有挂单
-func (t *FuturesTrader) CancelAllOrders(symbol string) error {
+// positionSide: 可选参数，如果指定则只取消该方向的订单（"LONG" 或 "SHORT"），不指定则取消所有方向的订单
+func (t *FuturesTrader) CancelAllOrders(symbol string, positionSide ...string) error {
+	// 如果指定了 PositionSide，需要先获取订单列表，然后只取消匹配的订单
+	if len(positionSide) > 0 && positionSide[0] != "" {
+		// 获取该币种的所有挂单
+		orders, err := t.client.NewListOpenOrdersService().Symbol(symbol).Do(context.Background())
+		if err != nil {
+			return fmt.Errorf("获取挂单列表失败: %w", err)
+		}
+
+		// 确定要取消的 PositionSide
+		var targetPosSide futures.PositionSideType
+		switch positionSide[0] {
+		case "LONG":
+			targetPosSide = futures.PositionSideTypeLong
+		case "SHORT":
+			targetPosSide = futures.PositionSideTypeShort
+		default:
+			// 如果传入的值不是 LONG 或 SHORT，取消所有订单
+			return t.cancelAllOrdersForSymbol(symbol)
+		}
+
+		// 只取消匹配 PositionSide 的订单
+		canceledCount := 0
+		for _, order := range orders {
+			if order.PositionSide == targetPosSide {
+				_, err := t.client.NewCancelOrderService().
+					Symbol(symbol).
+					OrderID(order.OrderID).
+					Do(context.Background())
+				if err != nil {
+					log.Printf("  ⚠ 取消订单失败 (orderID=%d): %v", order.OrderID, err)
+				} else {
+					canceledCount++
+				}
+			}
+		}
+
+		if canceledCount > 0 {
+			log.Printf("  ✓ 已取消 %s 的 %s 方向挂单（共 %d 个）", symbol, positionSide[0], canceledCount)
+		} else {
+			log.Printf("  ✓ %s 的 %s 方向没有挂单", symbol, positionSide[0])
+		}
+		return nil
+	}
+
+	// 如果没有指定 PositionSide，取消所有订单
+	return t.cancelAllOrdersForSymbol(symbol)
+}
+
+// cancelAllOrdersForSymbol 取消该币种的所有挂单（内部方法）
+func (t *FuturesTrader) cancelAllOrdersForSymbol(symbol string) error {
 	err := t.client.NewCancelAllOpenOrdersService().
 		Symbol(symbol).
 		Do(context.Background())

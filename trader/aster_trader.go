@@ -972,9 +972,19 @@ func (t *AsterTrader) SetTakeProfit(symbol string, positionSide string, quantity
 }
 
 // CancelAllOrders 取消所有订单
-func (t *AsterTrader) CancelAllOrders(symbol string) error {
+// positionSide: 可选参数，如果指定则只取消该方向的订单（"LONG" 或 "SHORT"），不指定则取消所有方向的订单
+func (t *AsterTrader) CancelAllOrders(symbol string, positionSide ...string) error {
 	params := map[string]interface{}{
 		"symbol": symbol,
+	}
+
+	// 如果指定了 PositionSide，则只取消该方向的订单
+	if len(positionSide) > 0 && positionSide[0] != "" {
+		// Aster API 使用 "BOTH", "LONG", "SHORT"
+		params["positionSide"] = positionSide[0]
+		log.Printf("  ✓ 取消 %s 的 %s 方向挂单", symbol, positionSide[0])
+	} else {
+		log.Printf("  ✓ 取消 %s 的所有挂单", symbol)
 	}
 
 	_, err := t.request("DELETE", "/fapi/v3/allOpenOrders", params)

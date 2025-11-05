@@ -71,7 +71,7 @@ type Context struct {
 // Decision AI的交易决策
 type Decision struct {
 	Symbol          string  `json:"symbol"`
-	Action          string  `json:"action"` // "open_long", "open_short", "close_long", "close_short", "hold", "wait"
+	Action          string  `json:"action"` // "open_long", "open_short", "close_long", "close_short", "hold", "wait", "partial_close", "update_stop_loss", "update_take_profit"
 	Leverage        int     `json:"leverage,omitempty"`
 	PositionSizeUSD float64 `json:"position_size_usd,omitempty"`
 	StopLoss        float64 `json:"stop_loss,omitempty"`
@@ -79,6 +79,11 @@ type Decision struct {
 	Confidence      int     `json:"confidence,omitempty"` // 信心度 (0-100)
 	RiskUSD         float64 `json:"risk_usd,omitempty"`   // 最大美元风险
 	Reasoning       string  `json:"reasoning"`
+	// 部分平仓相关字段
+	ClosePercentage float64 `json:"close_percentage,omitempty"` // 部分平仓百分比 (0-100)
+	// 更新止损止盈相关字段
+	NewStopLoss   float64 `json:"new_stop_loss,omitempty"`   // 新的止损价格
+	NewTakeProfit float64 `json:"new_take_profit,omitempty"` // 新的止盈价格
 }
 
 // FullDecision AI的完整决策（包含思维链）
@@ -278,9 +283,12 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"close_long\", \"reasoning\": \"止盈离场\"}\n")
 	sb.WriteString("]\n```\n\n")
 	sb.WriteString("字段说明:\n")
-	sb.WriteString("- `action`: open_long | open_short | close_long | close_short | hold | wait\n")
+	sb.WriteString("- `action`: open_long | open_short | close_long | close_short | hold | wait | partial_close | update_stop_loss | update_take_profit\n")
 	sb.WriteString("- `confidence`: 0-100（开仓建议≥75）\n")
-	sb.WriteString("- 开仓时必填: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning\n\n")
+	sb.WriteString("- 开仓时必填: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning\n")
+	sb.WriteString("- 部分平仓时必填: close_percentage (0-100), stop_loss, take_profit (为剩余仓位重新设置)\n")
+	sb.WriteString("- 更新止损时必填: new_stop_loss\n")
+	sb.WriteString("- 更新止盈时必填: new_take_profit\n\n")
 
 	return sb.String()
 }
@@ -289,18 +297,15 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 func buildUserPrompt(ctx *Context) string {
 	var sb strings.Builder
 
-	// 系统状态
+	// 1. 时间信息
 	sb.WriteString(fmt.Sprintf("时间: %s | 周期: #%d | 运行: %d分钟\n\n",
 		ctx.CurrentTime, ctx.CallCount, ctx.RuntimeMinutes))
 
-	// BTC 市场
-	if btcData, hasBTC := ctx.MarketDataMap["BTCUSDT"]; hasBTC {
-		sb.WriteString(fmt.Sprintf("BTC: %.2f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI: %.2f\n\n",
-			btcData.CurrentPrice, btcData.PriceChange1h, btcData.PriceChange4h,
-			btcData.CurrentMACD, btcData.CurrentRSI7))
-	}
+	// 2. 数据顺序说明
+	sb.WriteString("**ALL OF THE PRICE OR SIGNAL DATA BELOW IS ORDERED: OLDEST → NEWEST**\n\n")
 
-	// 账户
+	// 3. 账户信息和表现（前置）
+	sb.WriteString("# HERE IS YOUR ACCOUNT INFORMATION & PERFORMANCE\n\n")
 	sb.WriteString(fmt.Sprintf("账户: 净值%.2f | 余额%.2f (%.1f%%) | 盈亏%+.2f%% | 保证金%.1f%% | 持仓%d个\n\n",
 		ctx.Account.TotalEquity,
 		ctx.Account.AvailableBalance,
@@ -309,9 +314,12 @@ func buildUserPrompt(ctx *Context) string {
 		ctx.Account.MarginUsedPct,
 		ctx.Account.PositionCount))
 
-	// 持仓（完整市场数据）
+	// 记录已输出市场数据的币种（避免重复输出）
+	displayedSymbols := make(map[string]bool)
+
+	// 4. 当前持仓（包含完整市场数据）
 	if len(ctx.Positions) > 0 {
-		sb.WriteString("## 当前持仓\n")
+		sb.WriteString("## 当前持仓：\n\n")
 		for i, pos := range ctx.Positions {
 			// 计算持仓时长
 			holdingDuration := ""
@@ -332,50 +340,27 @@ func buildUserPrompt(ctx *Context) string {
 				pos.EntryPrice, pos.MarkPrice, pos.UnrealizedPnLPct,
 				pos.Leverage, pos.MarginUsed, pos.LiquidationPrice, holdingDuration))
 
-			// 使用FormatMarketData输出完整市场数据
+			// 输出完整市场数据（便于AI分析是否需要平仓）
 			if marketData, ok := ctx.MarketDataMap[pos.Symbol]; ok {
 				sb.WriteString(market.Format(marketData))
 				sb.WriteString("\n")
+				displayedSymbols[pos.Symbol] = true // 标记已输出
 			}
 		}
 	} else {
 		sb.WriteString("当前持仓: 无\n\n")
 	}
 
-	// 候选币种（完整市场数据）
-	sb.WriteString(fmt.Sprintf("## 候选币种 (%d个)\n\n", len(ctx.MarketDataMap)))
-	displayedCount := 0
-	for _, coin := range ctx.CandidateCoins {
-		marketData, hasData := ctx.MarketDataMap[coin.Symbol]
-		if !hasData {
-			continue
-		}
-		displayedCount++
-
-		sourceTags := ""
-		if len(coin.Sources) > 1 {
-			sourceTags = " (AI500+OI_Top双重信号)"
-		} else if len(coin.Sources) == 1 && coin.Sources[0] == "oi_top" {
-			sourceTags = " (OI_Top持仓增长)"
-		}
-
-		// 使用FormatMarketData输出完整市场数据
-		sb.WriteString(fmt.Sprintf("### %d. %s%s\n\n", displayedCount, coin.Symbol, sourceTags))
-		sb.WriteString(market.Format(marketData))
-		sb.WriteString("\n")
-	}
-	sb.WriteString("\n")
-
-	// 历史表现分析（精简版本：只传递核心指标，符合系统提示词"夏普比率是唯一指标"的要求）
+	// 5. 历史表现分析
 	if ctx.Performance != nil {
-		sb.WriteString("## 📊 历史表现分析\n\n")
-		
+		sb.WriteString("## 历史表现分析：\n\n")
+
 		// 定义精简的Performance数据结构
 		type PerformanceData struct {
 			TotalTrades int     `json:"total_trades"`
 			SharpeRatio float64 `json:"sharpe_ratio"`
 		}
-		
+
 		var perfData PerformanceData
 		if jsonData, err := json.Marshal(ctx.Performance); err == nil {
 			if err := json.Unmarshal(jsonData, &perfData); err == nil {
@@ -383,7 +368,7 @@ func buildUserPrompt(ctx *Context) string {
 					// 核心指标：夏普比率（系统提示词明确要求的唯一指标）
 					sb.WriteString(fmt.Sprintf("**夏普比率**: %.2f (这是你的核心绩效指标，用于调整交易策略)\n\n",
 						perfData.SharpeRatio))
-					
+
 					// 交易频率提醒（帮助AI判断是否过度交易）
 					// 假设分析窗口是1000个周期（约50小时），帮助AI判断交易频率是否合理
 					sb.WriteString(fmt.Sprintf("**总交易数**: %d (最近1000个周期内，用于判断交易频率是否合理)\n\n",
@@ -394,6 +379,65 @@ func buildUserPrompt(ctx *Context) string {
 				}
 			}
 		}
+	}
+
+	sb.WriteString("---\n\n")
+
+	// 6. 检查是否有市场数据需要显示（BTC或候选币种）
+	hasBTC := displayedSymbols["BTCUSDT"]
+	hasCandidates := false
+	for _, coin := range ctx.CandidateCoins {
+		if !displayedSymbols[coin.Symbol] {
+			if _, ok := ctx.MarketDataMap[coin.Symbol]; ok {
+				hasCandidates = true
+				break
+			}
+		}
+	}
+
+	// 只有在有市场数据需要显示时才输出标题
+	if (!hasBTC && ctx.MarketDataMap["BTCUSDT"] != nil) || hasCandidates {
+		sb.WriteString("# CURRENT MARKET STATE FOR ALL COINS\n\n")
+	}
+
+	// 7. BTC市场状态（单独强调，仅当BTC不是持仓币种时）
+	if btcData, hasBTCData := ctx.MarketDataMap["BTCUSDT"]; hasBTCData && !displayedSymbols["BTCUSDT"] {
+		sb.WriteString("## BTC市场状态（市场领导者，交易前必须确认BTC状态）\n\n")
+		sb.WriteString(market.Format(btcData))
+		sb.WriteString("\n")
+		displayedSymbols["BTCUSDT"] = true // 标记已输出
+	}
+
+	// 8. 候选币种（完整市场数据）- 排除已输出的持仓币种
+	if hasCandidates {
+		sb.WriteString("## 候选币种：\n\n")
+		displayedCount := 0
+		for _, coin := range ctx.CandidateCoins {
+			// 跳过已输出的币种（持仓币种）
+			if displayedSymbols[coin.Symbol] {
+				continue
+			}
+
+			marketData, hasData := ctx.MarketDataMap[coin.Symbol]
+			if !hasData {
+				continue
+			}
+			displayedCount++
+
+			sourceTags := ""
+			if len(coin.Sources) > 1 {
+				sourceTags = " (AI500+OI_Top双重信号)"
+			} else if len(coin.Sources) == 1 && coin.Sources[0] == "oi_top" {
+				sourceTags = " (OI_Top持仓增长)"
+			}
+
+			// 输出完整市场数据
+			sb.WriteString(fmt.Sprintf("### %d. %s%s\n\n", displayedCount, coin.Symbol, sourceTags))
+			sb.WriteString(market.Format(marketData))
+			sb.WriteString("\n")
+			displayedSymbols[coin.Symbol] = true // 标记已输出
+		}
+		sb.WriteString("\n")
 	}
 
 	sb.WriteString("---\n\n")
@@ -520,12 +564,15 @@ func findMatchingBracket(s string, start int) int {
 func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int) error {
 	// 验证action
 	validActions := map[string]bool{
-		"open_long":   true,
-		"open_short":  true,
-		"close_long":  true,
-		"close_short": true,
-		"hold":        true,
-		"wait":        true,
+		"open_long":          true,
+		"open_short":         true,
+		"close_long":         true,
+		"close_short":        true,
+		"hold":               true,
+		"wait":               true,
+		"partial_close":      true,
+		"update_stop_loss":   true,
+		"update_take_profit": true,
 	}
 
 	if !validActions[d.Action] {
@@ -602,6 +649,36 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		if riskRewardRatio < 3.0 {
 			return fmt.Errorf("风险回报比过低(%.2f:1)，必须≥3.0:1 [风险:%.2f%% 收益:%.2f%%] [止损:%.2f 止盈:%.2f]",
 				riskRewardRatio, riskPercent, rewardPercent, d.StopLoss, d.TakeProfit)
+		}
+	}
+
+	// 部分平仓操作验证
+	if d.Action == "partial_close" {
+		if d.ClosePercentage <= 0 || d.ClosePercentage > 100 {
+			return fmt.Errorf("平仓百分比必须在 0-100 之间: %.2f", d.ClosePercentage)
+		}
+		if d.Symbol == "" {
+			return fmt.Errorf("部分平仓必须指定币种")
+		}
+	}
+
+	// 更新止损操作验证
+	if d.Action == "update_stop_loss" {
+		if d.NewStopLoss <= 0 {
+			return fmt.Errorf("新止损价格必须大于0: %.2f", d.NewStopLoss)
+		}
+		if d.Symbol == "" {
+			return fmt.Errorf("更新止损必须指定币种")
+		}
+	}
+
+	// 更新止盈操作验证
+	if d.Action == "update_take_profit" {
+		if d.NewTakeProfit <= 0 {
+			return fmt.Errorf("新止盈价格必须大于0: %.2f", d.NewTakeProfit)
+		}
+		if d.Symbol == "" {
+			return fmt.Errorf("更新止盈必须指定币种")
 		}
 	}
 

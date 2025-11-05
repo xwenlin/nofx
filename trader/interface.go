@@ -37,7 +37,8 @@ type Trader interface {
 	SetTakeProfit(symbol string, positionSide string, quantity, takeProfitPrice float64) error
 
 	// CancelAllOrders 取消该币种的所有挂单
-	CancelAllOrders(symbol string) error
+	// positionSide: 可选参数，如果指定则只取消该方向的订单（"LONG" 或 "SHORT"），不指定则取消所有方向的订单
+	CancelAllOrders(symbol string, positionSide ...string) error
 
 	// FormatQuantity 格式化数量到正确的精度
 	FormatQuantity(symbol string, quantity float64) (string, error)
