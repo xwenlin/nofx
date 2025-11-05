@@ -61,8 +61,9 @@ export function LoginPage() {
         onLanguageChange={() => { }}
         onPageChange={(page) => {
           console.log('LoginPage onPageChange called with:', page);
+          const baseUrl = import.meta.env.BASE_URL || '/';
           if (page === 'competition') {
-            window.location.href = '/competition';
+            window.location.href = baseUrl.slice(0, -1) + '/competition';
           }
         }}
       />

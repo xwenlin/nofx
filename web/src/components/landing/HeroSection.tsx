@@ -1,6 +1,7 @@
 import { motion, useAnimation, useScroll, useTransform } from 'framer-motion'
 import { Sparkles } from 'lucide-react'
 import { Language, t } from '../../i18n/translations'
+import { getImagePath } from '../ModelIcons'
 
 interface HeroSectionProps {
   language: Language
@@ -107,7 +108,7 @@ export default function HeroSection({ language }: HeroSectionProps) {
           >
             {/* Background Layer */}
             <motion.img
-              src='/images/hand-bg.png'
+              src={getImagePath('hand-bg.png')}
               alt='NOFX Platform Background'
               className='w-full opacity-90'
               style={{ opacity, scale }}
@@ -117,7 +118,7 @@ export default function HeroSection({ language }: HeroSectionProps) {
 
             {/* Hand Layer - Animated */}
             <motion.img
-              src='/images/hand.png'
+              src={getImagePath('hand.png')}
               alt='Robot Hand'
               className='absolute top-0 left-0 w-full'
               style={{ opacity }}

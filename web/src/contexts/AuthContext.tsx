@@ -96,7 +96,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         requestBody.beta_code = betaCode;
       }
 
-      const response = await fetch('/api/register', {
+      const response = await fetch('/nofx-api/register', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -143,7 +143,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         localStorage.setItem('auth_user', JSON.stringify(userInfo));
 
         // 跳转到首页
-        window.history.pushState({}, '', '/');
+        const baseUrl = import.meta.env.BASE_URL || '/';
+        window.history.pushState({}, '', baseUrl);
         window.dispatchEvent(new PopStateEvent('popstate'));
 
         return { success: true, message: data.message };
@@ -176,7 +177,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         localStorage.setItem('auth_user', JSON.stringify(userInfo));
 
         // 跳转到首页
-        window.history.pushState({}, '', '/');
+        const baseUrl = import.meta.env.BASE_URL || '/';
+        window.history.pushState({}, '', baseUrl);
         window.dispatchEvent(new PopStateEvent('popstate'));
 
         return { success: true, message: data.message };

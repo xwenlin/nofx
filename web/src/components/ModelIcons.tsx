@@ -14,6 +14,16 @@ export const getImagePath = (imageName: string): string => {
   return `${baseUrl}images/${imageName}`;
 };
 
+// 获取链接路径的工具函数（适配 base 路径）
+export const getLinkPath = (path: string): string => {
+  const baseUrl = import.meta.env.BASE_URL || '/';
+  // 如果 base 是 '/'，直接返回路径
+  if (baseUrl === '/') return path;
+  // 移除 base 末尾的 '/'，然后拼接路径
+  const baseWithoutSlash = baseUrl.slice(0, -1);
+  return `${baseWithoutSlash}${path}`;
+};
+
 interface IconProps {
   width?: number;
   height?: number;

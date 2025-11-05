@@ -25,6 +25,26 @@ import type {
 
 type Page = 'competition' | 'traders' | 'trader';
 
+// 获取base路径的工具函数
+const getBasePath = () => import.meta.env.BASE_URL || '/';
+
+// 获取完整路径的工具函数（带base路径）
+const getFullPath = (path: string) => {
+  const base = getBasePath();
+  // 确保base以/结尾，path以/开头
+  if (base === '/') return path;
+  if (path === '/' || path === '') return base.slice(0, -1); // 移除base末尾的/
+  return base.slice(0, -1) + path;
+};
+
+// 移除base路径，获取相对路径
+const removeBasePath = (fullPath: string): string => {
+  const base = getBasePath();
+  if (base === '/' || !fullPath.startsWith(base)) return fullPath;
+  const relative = fullPath.slice(base.length - 1); // base是'/nofx/'，需要保留开头的/
+  return relative || '/';
+};
+
 // 获取友好的AI模型名称
 function getModelDisplayName(modelId: string): string {
   switch (modelId.toLowerCase()) {
@@ -47,7 +67,8 @@ function App() {
 
   // 从URL路径读取初始页面状态（支持刷新保持页面）
   const getInitialPage = (): Page => {
-    const path = window.location.pathname;
+    const fullPath = window.location.pathname;
+    const path = removeBasePath(fullPath);
     const hash = window.location.hash.slice(1); // 去掉 #
 
     if (path === '/traders' || hash === 'traders') return 'traders';
@@ -62,7 +83,8 @@ function App() {
   // 监听URL变化，同步页面状态
   useEffect(() => {
     const handleRouteChange = () => {
-      const path = window.location.pathname;
+      const fullPath = window.location.pathname;
+      const path = removeBasePath(fullPath);
       const hash = window.location.hash.slice(1);
 
       if (path === '/traders' || hash === 'traders') {
@@ -186,11 +208,12 @@ function App() {
 
   // Set current page based on route for consistent navigation state
   useEffect(() => {
-    if (route === '/competition') {
+    const path = removeBasePath(route);
+    if (path === '/competition') {
       setCurrentPage('competition');
-    } else if (route === '/traders') {
+    } else if (path === '/traders') {
       setCurrentPage('traders');
-    } else if (route === '/dashboard') {
+    } else if (path === '/dashboard') {
       setCurrentPage('trader');
     }
   }, [route]);
@@ -208,13 +231,14 @@ function App() {
   }
 
   // Handle specific routes regardless of authentication
-  if (route === '/login') {
+  const currentPath = removeBasePath(route);
+  if (currentPath === '/login') {
     return <LoginPage />;
   }
-  if (route === '/register') {
+  if (currentPath === '/register') {
     return <RegisterPage />;
   }
-  if (route === '/competition') {
+  if (currentPath === '/competition') {
     return (
       <div className="min-h-screen" style={{ background: '#000000', color: '#EAECEF' }}>
         <HeaderBar
@@ -232,17 +256,20 @@ function App() {
 
             if (page === 'competition') {
               console.log('Navigating to competition');
-              window.history.pushState({}, '', '/competition');
+              const fullPath = getFullPath('/competition');
+              window.history.pushState({}, '', fullPath);
               setRoute('/competition');
               setCurrentPage('competition');
             } else if (page === 'traders') {
               console.log('Navigating to traders');
-              window.history.pushState({}, '', '/traders');
+              const fullPath = getFullPath('/traders');
+              window.history.pushState({}, '', fullPath);
               setRoute('/traders');
               setCurrentPage('traders');
             } else if (page === 'trader') {
               console.log('Navigating to trader/dashboard');
-              window.history.pushState({}, '', '/dashboard');
+              const fullPath = getFullPath('/dashboard');
+              window.history.pushState({}, '', fullPath);
               setRoute('/dashboard');
               setCurrentPage('trader');
             }
@@ -258,7 +285,7 @@ function App() {
   }
 
   // Show landing page for root route
-  if (route === '/' || route === '') {
+  if (currentPath === '/' || currentPath === '') {
     return <LandingPage />;
   }
 
@@ -282,15 +309,18 @@ function App() {
           console.log('Main app onPageChange called with:', page);
 
           if (page === 'competition') {
-            window.history.pushState({}, '', '/competition');
+            const fullPath = getFullPath('/competition');
+            window.history.pushState({}, '', fullPath);
             setRoute('/competition');
             setCurrentPage('competition');
           } else if (page === 'traders') {
-            window.history.pushState({}, '', '/traders');
+            const fullPath = getFullPath('/traders');
+            window.history.pushState({}, '', fullPath);
             setRoute('/traders');
             setCurrentPage('traders');
           } else if (page === 'trader') {
-            window.history.pushState({}, '', '/dashboard');
+            const fullPath = getFullPath('/dashboard');
+            window.history.pushState({}, '', fullPath);
             setRoute('/dashboard');
             setCurrentPage('trader');
           }
@@ -305,7 +335,8 @@ function App() {
           <AITradersPage
             onTraderSelect={(traderId) => {
               setSelectedTraderId(traderId);
-              window.history.pushState({}, '', '/dashboard');
+              const fullPath = getFullPath('/dashboard');
+              window.history.pushState({}, '', fullPath);
               setRoute('/dashboard');
               setCurrentPage('trader');
             }}

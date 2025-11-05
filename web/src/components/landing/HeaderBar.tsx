@@ -2,7 +2,7 @@ import { motion } from 'framer-motion'
 import { ChevronDown, Menu, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { t, type Language } from '../../i18n/translations'
-import { getIconPath } from '../ModelIcons'
+import { getIconPath, getLinkPath } from '../ModelIcons'
 
 interface HeaderBarProps {
   onLoginClick?: () => void
@@ -46,7 +46,7 @@ export default function HeaderBar({ isLoggedIn = false, isHomePage = false, curr
       <div className='max-w-7xl mx-auto px-4 sm:px-6 lg:px-8'>
         <div className='flex items-center justify-between h-16'>
           {/* Logo */}
-          <a href='/' className='flex items-center gap-3 hover:opacity-80 transition-opacity cursor-pointer'>
+          <a href={getLinkPath('/')} className='flex items-center gap-3 hover:opacity-80 transition-opacity cursor-pointer'>
             <img src={getIconPath('nofx.svg')} alt='NOFX Logo' className='w-8 h-8' />
             <span className='text-xl font-bold' style={{ color: 'var(--brand-yellow)' }}>
               NOFX
@@ -177,7 +177,7 @@ export default function HeaderBar({ isLoggedIn = false, isHomePage = false, curr
               ) : (
                 // Landing page navigation when not logged in
                 <a
-                  href='/competition'
+                  href={getLinkPath('/competition')}
                   className='text-sm font-bold transition-all duration-300 relative focus:outline-2 focus:outline-yellow-500'
                   style={{
                     color: currentPage === 'competition' ? 'var(--brand-yellow)' : 'var(--brand-light-gray)',
@@ -289,14 +289,14 @@ export default function HeaderBar({ isLoggedIn = false, isHomePage = false, curr
                 currentPage !== 'login' && currentPage !== 'register' && (
                   <div className='flex items-center gap-3'>
                     <a
-                      href='/login'
+                      href={getLinkPath('/login')}
                       className='px-3 py-2 text-sm font-medium transition-colors rounded'
                       style={{ color: 'var(--brand-light-gray)' }}
                     >
                       {t('signIn', language)}
                     </a>
                     <a
-                      href='/register'
+                      href={getLinkPath('/register')}
                       className='px-4 py-2 rounded font-semibold text-sm transition-colors hover:opacity-90'
                       style={{ background: 'var(--brand-yellow)', color: 'var(--brand-black)' }}
                     >
@@ -413,7 +413,7 @@ export default function HeaderBar({ isLoggedIn = false, isHomePage = false, curr
             </button>
           ) : (
             <a
-              href='/competition'
+              href={getLinkPath('/competition')}
               className='block text-sm font-bold transition-all duration-300 relative focus:outline-2 focus:outline-yellow-500'
               style={{
                 color: currentPage === 'competition' ? 'var(--brand-yellow)' : 'var(--brand-light-gray)',
@@ -587,7 +587,7 @@ export default function HeaderBar({ isLoggedIn = false, isHomePage = false, curr
           {!isLoggedIn && currentPage !== 'login' && currentPage !== 'register' && (
             <div className='space-y-2 mt-2'>
               <a
-                href='/login'
+                href={getLinkPath('/login')}
                 className='block w-full px-4 py-2 rounded text-sm font-medium text-center transition-colors'
                 style={{ color: 'var(--brand-light-gray)', border: '1px solid var(--brand-light-gray)' }}
                 onClick={() => setMobileMenuOpen(false)}
@@ -595,7 +595,7 @@ export default function HeaderBar({ isLoggedIn = false, isHomePage = false, curr
                 {t('signIn', language)}
               </a>
               <a
-                href='/register'
+                href={getLinkPath('/register')}
                 className='block w-full px-4 py-2 rounded font-semibold text-sm text-center transition-colors'
                 style={{ background: 'var(--brand-yellow)', color: 'var(--brand-black)' }}
                 onClick={() => setMobileMenuOpen(false)}
