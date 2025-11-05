@@ -411,6 +411,7 @@ func (at *AutoTrader) runCycle() error {
 			Price:     0,
 			Timestamp: time.Now(),
 			Success:   false,
+			Reasoning: d.Reasoning, // 保存AI的决策原因
 		}
 
 		if err := at.executeDecisionWithRecord(&d, &actionRecord); err != nil {

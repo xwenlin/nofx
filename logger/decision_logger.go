@@ -59,6 +59,7 @@ type DecisionAction struct {
 	Timestamp time.Time `json:"timestamp"` // 执行时间
 	Success   bool      `json:"success"`   // 是否成功
 	Error     string    `json:"error"`     // 错误信息
+	Reasoning string    `json:"reasoning"` // 决策原因（AI提供的reasoning）
 }
 
 // DecisionLogger 决策日志记录器
@@ -339,7 +340,7 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 	// 使用足够大的窗口（10000个周期，约500小时）来查找开仓记录，确保能匹配到所有可能的开仓
 	// 这样即使交易持仓时间很长，也能正确匹配开仓和平仓
 	allRecords, err := l.GetLatestRecords(10000) // 从所有历史记录中查找（最多10000个周期）
-	
+
 	// 确定分析窗口的起始位置（在allRecords中的索引）
 	// records是分析窗口内的记录（最近的lookbackCycles个周期）
 	// allRecords包含所有历史记录（最多10000个周期），按时间从旧到新排序
@@ -347,7 +348,7 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 	if len(allRecords) > len(records) {
 		windowStartIdx = len(allRecords) - len(records)
 	}
-	
+
 	if err == nil && len(allRecords) > 0 {
 		// 从所有历史记录中收集开仓记录（按时间顺序，从旧到新）
 		// 关键：只删除分析窗口外的平仓记录，保留窗口内的平仓对应的开仓记录
