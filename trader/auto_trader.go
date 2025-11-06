@@ -854,7 +854,21 @@ func (at *AutoTrader) executePartialCloseWithRecord(decision *decision.Decision,
 			if side, ok := pos["side"].(string); ok {
 				positionSide = side
 			}
-			if qty, ok := pos["quantity"].(float64); ok {
+			// 从 positionAmt 字段获取持仓数量（与 GetPositions 返回的字段名一致）
+			if qty, ok := pos["positionAmt"].(float64); ok {
+				currentQuantity = qty
+				if currentQuantity < 0 {
+					currentQuantity = -currentQuantity // 空仓数量为负，转为正数
+				}
+			} else if qtyStr, ok := pos["positionAmt"].(string); ok {
+				if qty, err := strconv.ParseFloat(qtyStr, 64); err == nil {
+					currentQuantity = qty
+					if currentQuantity < 0 {
+						currentQuantity = -currentQuantity // 空仓数量为负，转为正数
+					}
+				}
+			} else if qty, ok := pos["quantity"].(float64); ok {
+				// 兼容旧代码（如果存在 quantity 字段）
 				currentQuantity = qty
 			} else if qtyStr, ok := pos["quantity"].(string); ok {
 				if qty, err := strconv.ParseFloat(qtyStr, 64); err == nil {
@@ -961,11 +975,18 @@ func (at *AutoTrader) executeUpdateStopLossWithRecord(decision *decision.Decisio
 			if side, ok := pos["side"].(string); ok {
 				positionSide = side
 			}
-			if qty, ok := pos["quantity"].(float64); ok {
+			// 从 positionAmt 字段获取持仓数量（与 GetPositions 返回的字段名一致）
+			if qty, ok := pos["positionAmt"].(float64); ok {
 				currentQuantity = qty
-			} else if qtyStr, ok := pos["quantity"].(string); ok {
+				if currentQuantity < 0 {
+					currentQuantity = -currentQuantity // 空仓数量为负，转为正数
+				}
+			} else if qtyStr, ok := pos["positionAmt"].(string); ok {
 				if qty, err := strconv.ParseFloat(qtyStr, 64); err == nil {
 					currentQuantity = qty
+					if currentQuantity < 0 {
+						currentQuantity = -currentQuantity // 空仓数量为负，转为正数
+					}
 				}
 			}
 			break
@@ -1055,11 +1076,18 @@ func (at *AutoTrader) executeUpdateTakeProfitWithRecord(decision *decision.Decis
 			if side, ok := pos["side"].(string); ok {
 				positionSide = side
 			}
-			if qty, ok := pos["quantity"].(float64); ok {
+			// 从 positionAmt 字段获取持仓数量（与 GetPositions 返回的字段名一致）
+			if qty, ok := pos["positionAmt"].(float64); ok {
 				currentQuantity = qty
-			} else if qtyStr, ok := pos["quantity"].(string); ok {
+				if currentQuantity < 0 {
+					currentQuantity = -currentQuantity // 空仓数量为负，转为正数
+				}
+			} else if qtyStr, ok := pos["positionAmt"].(string); ok {
 				if qty, err := strconv.ParseFloat(qtyStr, 64); err == nil {
 					currentQuantity = qty
+					if currentQuantity < 0 {
+						currentQuantity = -currentQuantity // 空仓数量为负，转为正数
+					}
 				}
 			}
 			break

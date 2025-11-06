@@ -402,7 +402,7 @@ func getOpenInterestData(symbol string) (*OIData, error) {
 	oiAverage := oiLatest // 默认使用当前值作为平均值（如果无法获取历史数据）
 
 	// 获取24小时的历史OI数据（每1小时一个数据点，共24个）
-	histURL := fmt.Sprintf("https://fapi.binance.com/fapi/v1/openInterestHist?symbol=%s&period=1h&limit=24", symbol)
+	histURL := fmt.Sprintf("https://fapi.binance.com/futures/data/openInterestHist?symbol=%s&period=1h&limit=24", symbol)
 	histResp, histErr := http.Get(histURL)
 	if histErr == nil {
 		defer histResp.Body.Close()
@@ -426,7 +426,7 @@ func getOpenInterestData(symbol string) (*OIData, error) {
 				oiAverage = sum / float64(validCount)
 
 				// 计算变化百分比（使用最早的历史数据，即24小时前）
-				// 历史数据按时间倒序排列，第一个是最早的
+				// 历史数据按时间倒序排列，最后一个是最早的
 				earliestOIStr := histResult[len(histResult)-1].SumOpenInterest
 				if earliestOI, parseErr := strconv.ParseFloat(earliestOIStr, 64); parseErr == nil && earliestOI > 0 {
 					oiDeltaPercent = ((oiLatest - earliestOI) / earliestOI) * 100
