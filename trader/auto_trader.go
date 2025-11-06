@@ -968,6 +968,7 @@ func (at *AutoTrader) executeUpdateStopLossWithRecord(decision *decision.Decisio
 	var targetPosition map[string]interface{}
 	var positionSide string
 	var currentQuantity float64
+	var entryPrice float64
 
 	for _, pos := range positions {
 		if pos["symbol"] == decision.Symbol {
@@ -989,6 +990,14 @@ func (at *AutoTrader) executeUpdateStopLossWithRecord(decision *decision.Decisio
 					}
 				}
 			}
+			// 获取入场价
+			if ep, ok := pos["entryPrice"].(float64); ok {
+				entryPrice = ep
+			} else if epStr, ok := pos["entryPrice"].(string); ok {
+				if ep, err := strconv.ParseFloat(epStr, 64); err == nil {
+					entryPrice = ep
+				}
+			}
 			break
 		}
 	}
@@ -1001,6 +1010,10 @@ func (at *AutoTrader) executeUpdateStopLossWithRecord(decision *decision.Decisio
 		return fmt.Errorf("持仓数量无效: %.4f", currentQuantity)
 	}
 
+	if entryPrice <= 0 {
+		return fmt.Errorf("无法获取 %s 的入场价", decision.Symbol)
+	}
+
 	// 获取当前价格用于验证
 	marketData, err := market.Get(decision.Symbol)
 	if err != nil {
@@ -1010,17 +1023,45 @@ func (at *AutoTrader) executeUpdateStopLossWithRecord(decision *decision.Decisio
 
 	// 验证止损价格是否合理
 	if positionSide == "long" {
-		// 多仓止损只能上移（更有利）
-		if decision.NewStopLoss < currentPrice {
-			return fmt.Errorf("多仓止损价格不能低于当前价格: 当前价格 %.2f, 新止损 %.2f", currentPrice, decision.NewStopLoss)
+		// 多仓止损逻辑：
+		// 1. 开仓时设置初始止损：止损价 < 入场价（限制初始亏损）
+		// 2. 持仓盈利后移动（上调）止损：新止损价 > 旧止损价，并且新止损价 >= 入场价（锁定已有利润）
+		// 3. 新止损必须 < 当前价格（否则会立即触发止损）
+		if decision.NewStopLoss >= currentPrice {
+			return fmt.Errorf("多仓止损价格不能高于或等于当前价格: 当前价格 %.2f, 新止损 %.2f", currentPrice, decision.NewStopLoss)
 		}
-		log.Printf("  ✅ 多仓止损上移至 %.2f (当前价格: %.2f)", decision.NewStopLoss, currentPrice)
+		// 如果当前价格 > 入场价（盈利），允许新止损 >= 入场价（锁定利润）
+		// 如果当前价格 <= 入场价（亏损或持平），新止损应该 >= 入场价（限制亏损）
+		if currentPrice > entryPrice {
+			// 盈利状态：允许新止损 >= 入场价（锁定利润）
+			log.Printf("  ✅ 多仓止损调整至 %.2f (入场价: %.2f, 当前价格: %.2f, 盈利状态)", decision.NewStopLoss, entryPrice, currentPrice)
+		} else {
+			// 亏损或持平状态：新止损应该 >= 入场价（限制亏损）
+			if decision.NewStopLoss < entryPrice {
+				return fmt.Errorf("多仓止损价格不能低于入场价: 入场价 %.2f, 新止损 %.2f", entryPrice, decision.NewStopLoss)
+			}
+			log.Printf("  ✅ 多仓止损调整至 %.2f (入场价: %.2f, 当前价格: %.2f)", decision.NewStopLoss, entryPrice, currentPrice)
+		}
 	} else if positionSide == "short" {
-		// 空仓止损只能下移（更有利）
-		if decision.NewStopLoss > currentPrice {
-			return fmt.Errorf("空仓止损价格不能高于当前价格: 当前价格 %.2f, 新止损 %.2f", currentPrice, decision.NewStopLoss)
+		// 空仓止损逻辑：
+		// 1. 开仓时设置初始止损：止损价 > 入场价（限制初始亏损）
+		// 2. 持仓盈利后移动（下调）止损：新止损价 < 旧止损价，并且新止损价 < 入场价（锁定已有利润）
+		// 3. 新止损必须 > 当前价格（否则会立即触发止损）
+		if decision.NewStopLoss <= currentPrice {
+			return fmt.Errorf("空仓止损价格不能低于或等于当前价格: 当前价格 %.2f, 新止损 %.2f", currentPrice, decision.NewStopLoss)
 		}
-		log.Printf("  ✅ 空仓止损下移至 %.2f (当前价格: %.2f)", decision.NewStopLoss, currentPrice)
+		// 如果当前价格 < 入场价（盈利），允许新止损 < 入场价（锁定利润）
+		// 如果当前价格 >= 入场价（亏损或持平），新止损应该 >= 入场价（限制亏损）
+		if currentPrice < entryPrice {
+			// 盈利状态：允许新止损 < 入场价（锁定利润）
+			log.Printf("  ✅ 空仓止损下调至 %.2f 锁定利润 (入场价: %.2f, 当前价格: %.2f, 盈利状态)", decision.NewStopLoss, entryPrice, currentPrice)
+		} else {
+			// 亏损或持平状态：新止损应该 >= 入场价（限制亏损）
+			if decision.NewStopLoss < entryPrice {
+				return fmt.Errorf("空仓止损价格不能低于入场价: 入场价 %.2f, 新止损 %.2f", entryPrice, decision.NewStopLoss)
+			}
+			log.Printf("  ✅ 空仓止损调整至 %.2f (入场价: %.2f, 当前价格: %.2f)", decision.NewStopLoss, entryPrice, currentPrice)
+		}
 	} else {
 		return fmt.Errorf("未知的持仓方向: %s", positionSide)
 	}
