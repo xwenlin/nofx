@@ -272,6 +272,23 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 // isRetryableError 判断错误是否可重试
 func isRetryableError(err error) bool {
 	errStr := err.Error()
+
+	// 余额不足、认证错误等不可重试的错误
+	nonRetryableErrors := []string{
+		"余额不足",
+		"Insufficient Balance",
+		"invalid_request_error",
+		"401", // 认证失败
+		"402", // 余额不足
+		"403", // 权限不足
+		"429", // 虽然429可以重试，但需要特殊处理（rate limit）
+	}
+	for _, nonRetryable := range nonRetryableErrors {
+		if strings.Contains(errStr, nonRetryable) {
+			return false
+		}
+	}
+
 	// 网络错误、超时、EOF等可以重试
 	retryableErrors := []string{
 		"EOF",
@@ -280,6 +297,10 @@ func isRetryableError(err error) bool {
 		"connection refused",
 		"temporary failure",
 		"no such host",
+		"500", // 服务器错误可以重试
+		"502", // Bad Gateway可以重试
+		"503", // Service Unavailable可以重试
+		"504", // Gateway Timeout可以重试
 	}
 	for _, retryable := range retryableErrors {
 		if strings.Contains(errStr, retryable) {

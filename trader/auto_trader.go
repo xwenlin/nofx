@@ -11,6 +11,7 @@ import (
 	"nofx/pool"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -99,6 +100,8 @@ type AutoTrader struct {
 	startTime             time.Time        // 系统启动时间
 	callCount             int              // AI调用次数
 	positionFirstSeenTime map[string]int64 // 持仓首次出现时间 (symbol_side -> timestamp毫秒)
+	cycleMutex            sync.Mutex       // 防止周期并发执行的互斥锁
+	cycleRunning          bool             // 周期是否正在执行中
 }
 
 // NewAutoTrader 创建自动交易器
@@ -237,11 +240,21 @@ func (at *AutoTrader) Run() error {
 	}
 
 	for at.isRunning {
-		select {
-		case <-ticker.C:
-			if err := at.runCycle(); err != nil {
-				log.Printf("❌ 执行失败: %v", err)
-			}
+		<-ticker.C
+		// 检查上一个周期是否还在执行
+		at.cycleMutex.Lock()
+		isRunning := at.cycleRunning
+		at.cycleMutex.Unlock()
+
+		if isRunning {
+			// 上一个周期还在执行，跳过本次触发
+			log.Printf("⏸ 上一个周期仍在执行中，跳过本次触发（等待下一个周期）")
+			continue
+		}
+
+		// 正常执行周期
+		if err := at.runCycle(); err != nil {
+			log.Printf("❌ 执行失败: %v", err)
 		}
 	}
 
@@ -256,10 +269,31 @@ func (at *AutoTrader) Stop() {
 
 // runCycle 运行一个交易周期（使用AI全权决策）
 func (at *AutoTrader) runCycle() error {
+	// 使用互斥锁防止并发执行
+	at.cycleMutex.Lock()
+	// 检查是否已经在执行
+	if at.cycleRunning {
+		at.cycleMutex.Unlock()
+		log.Printf("⏸ 周期已在执行中，跳过本次调用")
+		return nil
+	}
+	// 标记为正在执行
+	at.cycleRunning = true
+	at.cycleMutex.Unlock()
+
+	// 确保在函数退出时清除执行标志
+	defer func() {
+		at.cycleMutex.Lock()
+		at.cycleRunning = false
+		at.cycleMutex.Unlock()
+	}()
+
+	// 记录周期开始时间
+	cycleStartTime := time.Now()
 	at.callCount++
 
 	log.Printf("\n" + strings.Repeat("=", 70))
-	log.Printf("⏰ %s - AI决策周期 #%d", time.Now().Format("2006-01-02 15:04:05"), at.callCount)
+	log.Printf("⏰ %s - AI决策周期 #%d", cycleStartTime.Format("2006-01-02 15:04:05"), at.callCount)
 	log.Printf(strings.Repeat("=", 70))
 
 	// 创建决策记录
@@ -343,6 +377,20 @@ func (at *AutoTrader) runCycle() error {
 	if err != nil {
 		record.Success = false
 		record.ErrorMessage = fmt.Sprintf("获取AI决策失败: %v", err)
+
+		// 检查是否为余额不足错误
+		errStr := err.Error()
+		if strings.Contains(errStr, "余额不足") || strings.Contains(errStr, "Insufficient Balance") || strings.Contains(errStr, "status 402") {
+			log.Printf("\n" + strings.Repeat("!", 70))
+			log.Printf("⚠️  ⚠️  ⚠️  重要警告：AI API账户余额不足 ⚠️  ⚠️  ⚠️")
+			log.Printf(strings.Repeat("!", 70))
+			log.Printf("❌ 错误详情: %v", err)
+			log.Printf("💡 解决方案:")
+			log.Printf("   1. 登录您的AI API提供商账户（DeepSeek/Qwen等）")
+			log.Printf("   2. 充值账户余额")
+			log.Printf("   3. 确认余额充足后，交易机器人将自动恢复工作")
+			log.Printf(strings.Repeat("!", 70) + "\n")
+		}
 
 		// 打印系统提示词和AI思维链（即使有错误，也要输出以便调试）
 		if decision != nil {
