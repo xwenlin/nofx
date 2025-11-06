@@ -357,8 +357,14 @@ func buildUserPrompt(ctx *Context) string {
 
 		// 定义精简的Performance数据结构
 		type PerformanceData struct {
-			TotalTrades int     `json:"total_trades"`
-			SharpeRatio float64 `json:"sharpe_ratio"`
+			TotalTrades   int     `json:"total_trades"`
+			WinningTrades int     `json:"winning_trades"`
+			LosingTrades  int     `json:"losing_trades"`
+			WinRate       float64 `json:"win_rate"`
+			AvgWinPct     float64 `json:"avg_win_pct"`
+			AvgLossPct    float64 `json:"avg_loss_pct"`
+			ProfitFactor  float64 `json:"profit_factor"`
+			SharpeRatio   float64 `json:"sharpe_ratio"`
 		}
 
 		var perfData PerformanceData
@@ -366,16 +372,32 @@ func buildUserPrompt(ctx *Context) string {
 			if err := json.Unmarshal(jsonData, &perfData); err == nil {
 				if perfData.TotalTrades > 0 {
 					// 核心指标：夏普比率（系统提示词明确要求的唯一指标）
-					sb.WriteString(fmt.Sprintf("**夏普比率**: %.2f (这是你的核心绩效指标，用于调整交易策略)\n\n",
-						perfData.SharpeRatio))
+					sb.WriteString(fmt.Sprintf("夏普比率: %.2f（基于最近20笔交易计算）\n\n", perfData.SharpeRatio))
 
-					// 交易频率提醒（帮助AI判断是否过度交易）
-					// 假设分析窗口是1000个周期（约50小时），帮助AI判断交易频率是否合理
-					sb.WriteString(fmt.Sprintf("**总交易数**: %d (最近1000个周期内，用于判断交易频率是否合理)\n\n",
-						perfData.TotalTrades))
+					// 总交易数（包含盈利和亏损数量）
+					sb.WriteString(fmt.Sprintf("总交易数: %d 笔 (盈利: %d | 亏损: %d)\n\n",
+						perfData.TotalTrades, perfData.WinningTrades, perfData.LosingTrades))
+
+					// 胜率
+					sb.WriteString(fmt.Sprintf("胜率: %.1f%%\n\n", perfData.WinRate))
+
+					// 平均盈利和平均亏损
+					if perfData.AvgWinPct > 0 && perfData.AvgLossPct < 0 {
+						sb.WriteString(fmt.Sprintf("平均盈利: +%.1f%% | 平均亏损: %.1f%%\n\n",
+							perfData.AvgWinPct, perfData.AvgLossPct))
+					} else if perfData.AvgWinPct > 0 {
+						sb.WriteString(fmt.Sprintf("平均盈利: +%.1f%%\n\n", perfData.AvgWinPct))
+					} else if perfData.AvgLossPct < 0 {
+						sb.WriteString(fmt.Sprintf("平均亏损: %.1f%%\n\n", perfData.AvgLossPct))
+					}
+
+					// 盈亏比
+					if perfData.ProfitFactor > 0 {
+						sb.WriteString(fmt.Sprintf("盈亏比: %.2f:1\n\n", perfData.ProfitFactor))
+					}
 				} else {
 					// 如果没有交易记录，只显示提示
-					sb.WriteString("**当前无历史交易记录**\n\n")
+					sb.WriteString("当前无历史交易记录\n\n")
 				}
 			}
 		}

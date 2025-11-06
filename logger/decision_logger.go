@@ -293,8 +293,10 @@ type PerformanceAnalysis struct {
 	WinningTrades int                           `json:"winning_trades"` // 盈利交易数
 	LosingTrades  int                           `json:"losing_trades"`  // 亏损交易数
 	WinRate       float64                       `json:"win_rate"`       // 胜率
-	AvgWin        float64                       `json:"avg_win"`        // 平均盈利
-	AvgLoss       float64                       `json:"avg_loss"`       // 平均亏损
+	AvgWin        float64                       `json:"avg_win"`        // 平均盈利（USDT）
+	AvgLoss       float64                       `json:"avg_loss"`       // 平均亏损（USDT）
+	AvgWinPct     float64                       `json:"avg_win_pct"`    // 平均盈利百分比
+	AvgLossPct    float64                       `json:"avg_loss_pct"`   // 平均亏损百分比
 	ProfitFactor  float64                       `json:"profit_factor"`  // 盈亏比
 	SharpeRatio   float64                       `json:"sharpe_ratio"`   // 夏普比率（风险调整后收益）
 	RecentTrades  []TradeOutcome                `json:"recent_trades"`  // 最近N笔交易
@@ -512,6 +514,27 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 			analysis.AvgLoss /= float64(analysis.LosingTrades)
 		}
 
+		// 计算平均盈亏百分比（基于所有交易记录）
+		winSumPct := 0.0
+		winCountPct := 0
+		lossSumPct := 0.0
+		lossCountPct := 0
+		for _, trade := range analysis.RecentTrades {
+			if trade.PnLPct > 0 {
+				winSumPct += trade.PnLPct
+				winCountPct++
+			} else if trade.PnLPct < 0 {
+				lossSumPct += trade.PnLPct
+				lossCountPct++
+			}
+		}
+		if winCountPct > 0 {
+			analysis.AvgWinPct = winSumPct / float64(winCountPct)
+		}
+		if lossCountPct > 0 {
+			analysis.AvgLossPct = lossSumPct / float64(lossCountPct)
+		}
+
 		// Profit Factor = 总盈利 / 总亏损（绝对值）
 		// 注意：totalLossAmount 是负数，所以取负号得到绝对值
 		if totalLossAmount != 0 {
@@ -541,56 +564,60 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 		}
 	}
 
-	// 只保留最近的交易（倒序：最新的在前）
-	if len(analysis.RecentTrades) > 10 {
-		// 反转数组，让最新的在前
-		for i, j := 0, len(analysis.RecentTrades)-1; i < j; i, j = i+1, j-1 {
-			analysis.RecentTrades[i], analysis.RecentTrades[j] = analysis.RecentTrades[j], analysis.RecentTrades[i]
-		}
-		analysis.RecentTrades = analysis.RecentTrades[:10]
-	} else if len(analysis.RecentTrades) > 0 {
-		// 反转数组
+	// 反转数组，让最新的在前
+	if len(analysis.RecentTrades) > 0 {
 		for i, j := 0, len(analysis.RecentTrades)-1; i < j; i, j = i+1, j-1 {
 			analysis.RecentTrades[i], analysis.RecentTrades[j] = analysis.RecentTrades[j], analysis.RecentTrades[i]
 		}
 	}
 
-	// 计算夏普比率（需要至少2个数据点）
-	analysis.SharpeRatio = l.calculateSharpeRatio(records)
+	// 计算滚动夏普比率（基于过去20笔交易，或全部交易如果不足20笔）
+	var tradesForSharpe []TradeOutcome
+	if len(analysis.RecentTrades) > 20 {
+		// 取最近20笔交易（数组已反转，最新的在前）
+		tradesForSharpe = make([]TradeOutcome, 20)
+		copy(tradesForSharpe, analysis.RecentTrades[:20])
+		// 反转回时间顺序（旧到新），用于计算
+		for i, j := 0, len(tradesForSharpe)-1; i < j; i, j = i+1, j-1 {
+			tradesForSharpe[i], tradesForSharpe[j] = tradesForSharpe[j], tradesForSharpe[i]
+		}
+	} else {
+		// 交易数不足20笔，使用所有交易
+		tradesForSharpe = make([]TradeOutcome, len(analysis.RecentTrades))
+		copy(tradesForSharpe, analysis.RecentTrades)
+		// 反转回时间顺序（旧到新），用于计算
+		for i, j := 0, len(tradesForSharpe)-1; i < j; i, j = i+1, j-1 {
+			tradesForSharpe[i], tradesForSharpe[j] = tradesForSharpe[j], tradesForSharpe[i]
+		}
+	}
+
+	// 计算滚动夏普比率（基于过去最多20笔交易的收益率，如果不足20笔则使用全部）
+	analysis.SharpeRatio = l.calculateRollingSharpeRatio(tradesForSharpe)
+
+	// 只保留最近的10笔交易用于显示
+	if len(analysis.RecentTrades) > 10 {
+		analysis.RecentTrades = analysis.RecentTrades[:10]
+	}
 
 	return analysis, nil
 }
 
-// calculateSharpeRatio 计算夏普比率
-// 基于账户净值的变化计算风险调整后收益
-func (l *DecisionLogger) calculateSharpeRatio(records []*DecisionRecord) float64 {
-	if len(records) < 2 {
+// calculateRollingSharpeRatio 计算滚动夏普比率
+// 基于过去N笔交易的收益率序列计算风险调整后收益
+// 交易按时间顺序排列（旧到新）
+func (l *DecisionLogger) calculateRollingSharpeRatio(trades []TradeOutcome) float64 {
+	if len(trades) < 2 {
 		return 0.0
 	}
 
-	// 提取每个周期的账户净值
-	// 注意：TotalBalance字段实际存储的是TotalEquity（账户总净值）
-	// TotalUnrealizedProfit字段实际存储的是TotalPnL（相对初始余额的盈亏）
-	var equities []float64
-	for _, record := range records {
-		// 直接使用TotalBalance，因为它已经是完整的账户净值
-		equity := record.AccountState.TotalBalance
-		if equity > 0 {
-			equities = append(equities, equity)
-		}
-	}
-
-	if len(equities) < 2 {
-		return 0.0
-	}
-
-	// 计算周期收益率（period returns）
+	// 提取每笔交易的收益率（PnLPct转换为小数形式）
+	// PnLPct是相对于保证金的盈亏百分比，需要转换为收益率
 	var returns []float64
-	for i := 1; i < len(equities); i++ {
-		if equities[i-1] > 0 {
-			periodReturn := (equities[i] - equities[i-1]) / equities[i-1]
-			returns = append(returns, periodReturn)
-		}
+	for _, trade := range trades {
+		// 将百分比转换为小数形式（例如：5.0% -> 0.05）
+		// 收益率基于保证金，反映每笔交易的风险调整收益
+		returnRate := trade.PnLPct / 100.0
+		returns = append(returns, returnRate)
 	}
 
 	if len(returns) == 0 {
@@ -624,7 +651,8 @@ func (l *DecisionLogger) calculateSharpeRatio(records []*DecisionRecord) float64
 	}
 
 	// 计算夏普比率（假设无风险利率为0）
-	// 注：直接返回周期级别的夏普比率（非年化），正常范围 -2 到 +2
+	// 注：基于交易收益率的夏普比率，反映每笔交易的风险调整收益
+	// 正常范围 -2 到 +2，值越高表示风险调整后的收益越好
 	sharpeRatio := meanReturn / stdDev
 	return sharpeRatio
 }
