@@ -374,9 +374,17 @@ func buildUserPrompt(ctx *Context) string {
 					// 核心指标：夏普比率（系统提示词明确要求的唯一指标）
 					sb.WriteString(fmt.Sprintf("夏普比率: %.2f（基于最近20笔交易计算）\n\n", perfData.SharpeRatio))
 
-					// 总交易数（包含盈利和亏损数量）
-					sb.WriteString(fmt.Sprintf("总交易数: %d 笔 (盈利: %d | 亏损: %d)\n\n",
-						perfData.TotalTrades, perfData.WinningTrades, perfData.LosingTrades))
+					// 计算持平交易数量
+					evenTrades := perfData.TotalTrades - perfData.WinningTrades - perfData.LosingTrades
+
+					// 总交易数（包含盈利、亏损和持平数量）
+					if evenTrades > 0 {
+						sb.WriteString(fmt.Sprintf("总交易数: %d 笔 (盈利: %d | 亏损: %d | 持平: %d)\n\n",
+							perfData.TotalTrades, perfData.WinningTrades, perfData.LosingTrades, evenTrades))
+					} else {
+						sb.WriteString(fmt.Sprintf("总交易数: %d 笔 (盈利: %d | 亏损: %d)\n\n",
+							perfData.TotalTrades, perfData.WinningTrades, perfData.LosingTrades))
+					}
 
 					// 胜率
 					sb.WriteString(fmt.Sprintf("胜率: %.1f%%\n\n", perfData.WinRate))
