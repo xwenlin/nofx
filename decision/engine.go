@@ -119,13 +119,18 @@ func GetFullDecisionWithCustomPrompt(ctx *Context, mcpClient *mcp.Client, custom
 
 	// 4. 解析AI响应
 	decision, err := parseFullDecisionResponse(aiResponse, ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage)
+
+	// 无论是否有错误，都保存 SystemPrompt 和 UserPrompt（用于调试）
+	if decision != nil {
+		decision.Timestamp = time.Now()
+		decision.SystemPrompt = systemPrompt // 保存系统prompt
+		decision.UserPrompt = userPrompt     // 保存输入prompt
+	}
+
 	if err != nil {
 		return decision, fmt.Errorf("解析AI响应失败: %w", err)
 	}
 
-	decision.Timestamp = time.Now()
-	decision.SystemPrompt = systemPrompt // 保存系统prompt
-	decision.UserPrompt = userPrompt     // 保存输入prompt
 	return decision, nil
 }
 
@@ -490,7 +495,10 @@ func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthL
 		}, fmt.Errorf("提取决策失败: %w", err)
 	}
 
-	// 3. 验证决策
+	// 3. 规范化决策（自动修正超出限制的杠杆和仓位大小）
+	normalizeDecisions(decisions, accountEquity, btcEthLeverage, altcoinLeverage)
+
+	// 4. 验证决策
 	if err := validateDecisions(decisions, accountEquity, btcEthLeverage, altcoinLeverage); err != nil {
 		return &FullDecision{
 			CoTTrace:  cotTrace,
@@ -556,6 +564,51 @@ func fixMissingQuotes(jsonStr string) string {
 	jsonStr = strings.ReplaceAll(jsonStr, "\u2018", "'")  // '
 	jsonStr = strings.ReplaceAll(jsonStr, "\u2019", "'")  // '
 	return jsonStr
+}
+
+// normalizeDecisions 规范化决策（自动修正超出限制的杠杆和仓位大小）
+func normalizeDecisions(decisions []Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int) {
+	for i := range decisions {
+		d := &decisions[i]
+
+		// 只处理开仓操作
+		if d.Action != "open_long" && d.Action != "open_short" {
+			continue
+		}
+
+		// 根据币种确定最大杠杆和最大仓位价值
+		maxLeverage := altcoinLeverage
+		maxPositionValue := accountEquity * 1.5
+		if d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT" {
+			maxLeverage = btcEthLeverage
+			maxPositionValue = accountEquity * 10
+		}
+
+		// 修正杠杆
+		if d.Leverage > maxLeverage {
+			log.Printf("⚠️  决策 #%d (%s): AI决策杠杆 %dx 超过配置上限 %dx，自动调整为 %dx",
+				i+1, d.Symbol, d.Leverage, maxLeverage, maxLeverage)
+			d.Leverage = maxLeverage
+		} else if d.Leverage <= 0 {
+			log.Printf("⚠️  决策 #%d (%s): AI决策杠杆 %d 无效，自动调整为 %dx",
+				i+1, d.Symbol, d.Leverage, maxLeverage)
+			d.Leverage = maxLeverage
+		}
+
+		// 修正仓位大小
+		tolerance := maxPositionValue * 0.01 // 1%容差
+		if d.PositionSizeUSD > maxPositionValue+tolerance {
+			log.Printf("⚠️  决策 #%d (%s): AI决策仓位大小 %.0f USDT 超过配置上限 %.0f USDT，自动调整为 %.0f USDT",
+				i+1, d.Symbol, d.PositionSizeUSD, maxPositionValue, maxPositionValue)
+			d.PositionSizeUSD = maxPositionValue
+		} else if d.PositionSizeUSD <= 0 {
+			// 如果仓位大小无效，设置为最小合理值（账户净值的10%）
+			minPositionValue := accountEquity * 0.1
+			log.Printf("⚠️  决策 #%d (%s): AI决策仓位大小 %.2f USDT 无效，自动调整为 %.0f USDT（账户净值的10%%）",
+				i+1, d.Symbol, d.PositionSizeUSD, minPositionValue)
+			d.PositionSizeUSD = minPositionValue
+		}
+	}
 }
 
 // validateDecisions 验证所有决策（需要账户信息和杠杆配置）
