@@ -140,7 +140,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const loginAdmin = async (password: string) => {
     try {
-      const response = await fetch('/api/admin-login', {
+      const response = await fetch('/nofx-api/admin-login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password }),
@@ -317,7 +317,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     otpCode: string
   ) => {
     try {
-      const response = await fetch('/api/reset-password', {
+      const response = await fetch('/nofx-api/reset-password', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -344,7 +344,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = () => {
     const savedToken = localStorage.getItem('auth_token')
     if (savedToken) {
-      fetch('/api/logout', {
+      fetch('/nofx-api/logout', {
         method: 'POST',
         headers: { Authorization: `Bearer ${savedToken}` },
       }).catch(() => {

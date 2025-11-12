@@ -7,6 +7,7 @@ import { t } from '../i18n/translations'
 import { Header } from './Header'
 import { getFullPath } from './ModelIcons'
 import { Input } from './ui/input'
+import { toast } from 'sonner'
 
 export function ResetPasswordPage() {
   const { language } = useLanguage()
@@ -39,6 +40,7 @@ export function ResetPasswordPage() {
 
     if (result.success) {
       setSuccess(true)
+      toast.success(t('resetPasswordSuccess', language) || '重置成功')
       // 3秒后跳转到登录页面
       setTimeout(() => {
         const fullPath = getFullPath('/login');
@@ -46,7 +48,9 @@ export function ResetPasswordPage() {
         window.dispatchEvent(new PopStateEvent('popstate'))
       }, 3000)
     } else {
-      setError(result.message || t('resetPasswordFailed', language))
+      const msg = result.message || t('resetPasswordFailed', language)
+      setError(msg)
+      toast.error(msg)
     }
 
     setLoading(false)

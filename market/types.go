@@ -35,6 +35,7 @@ type IntradayData struct {
 	RSI14Values    []float64
 	Volumes        []float64 // 成交量序列
 	BuySellRatios  []float64 // 买卖压力比序列（TakerBuyBaseVolume / Volume）
+	ATR14       float64
 }
 
 // LongerTermData 长期数据(4小时时间框架)

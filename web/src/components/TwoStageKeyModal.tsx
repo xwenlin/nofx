@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { t, type Language } from '../i18n/translations'
+import { toast } from 'sonner'
+import { WebCryptoEnvironmentCheck } from './WebCryptoEnvironmentCheck'
 
 const DEFAULT_LENGTH = 64
 
@@ -73,7 +75,9 @@ export function TwoStageKeyModal({
   }, [isOpen, stage])
 
   const handleStage1Next = async () => {
-    if (part1.length < expectedPart1Length) {
+    // ✅ Normalize input (remove possible 0x prefix) before validating length
+    const normalized1 = part1.startsWith('0x') ? part1.slice(2) : part1
+    if (normalized1.length < expectedPart1Length) {
       setError(
         t('errors.privatekeyIncomplete', language, {
           expected: expectedPart1Length,
@@ -99,12 +103,14 @@ export function TwoStageKeyModal({
             ...obfuscationLog,
             `Stage 1: ${new Date().toISOString()} - Auto copied obfuscation`,
           ])
+          toast.success('已复制混淆字符串到剪贴板')
         } catch {
           setClipboardStatus('failed')
           setObfuscationLog([
             ...obfuscationLog,
             `Stage 1: ${new Date().toISOString()} - Auto copy failed, manual required`,
           ])
+          toast.error('复制失败，请手动复制混淆字符串')
         }
       } else {
         setClipboardStatus('failed')
@@ -112,6 +118,7 @@ export function TwoStageKeyModal({
           ...obfuscationLog,
           `Stage 1: ${new Date().toISOString()} - Clipboard API not available`,
         ])
+        toast('当前浏览器不支持自动复制，请手动复制')
       }
 
       setTimeout(() => {
@@ -125,7 +132,9 @@ export function TwoStageKeyModal({
   }
 
   const handleStage2Complete = () => {
-    if (part2.length < expectedPart2Length) {
+    // ✅ Normalize input (remove possible 0x prefix) before validating length
+    const normalized2 = part2.startsWith('0x') ? part2.slice(2) : part2
+    if (normalized2.length < expectedPart2Length) {
       setError(
         t('errors.privatekeyIncomplete', language, {
           expected: expectedPart2Length,
@@ -134,7 +143,9 @@ export function TwoStageKeyModal({
       return
     }
 
-    const fullKey = part1 + part2
+    // ✅ Concatenate after removing 0x prefix from both parts
+    const normalized1 = part1.startsWith('0x') ? part1.slice(2) : part1
+    const fullKey = normalized1 + normalized2
     if (!validatePrivateKeyFormat(fullKey, expectedLength)) {
       setError(t('errors.privatekeyInvalidFormat', language))
       return
@@ -185,6 +196,10 @@ export function TwoStageKeyModal({
                     length: expectedPart2Length,
                   })}
             </p>
+          </div>
+
+          <div className="mb-6">
+            <WebCryptoEnvironmentCheck language={language} variant="compact" />
           </div>
 
           {/* Stage 1 */}

@@ -301,6 +301,9 @@ func calculateIntradaySeries(klines []Kline) *IntradayData {
 		}
 	}
 
+	// 计算3m ATR14
+	data.ATR14 = calculateATR(klines, 14)
+
 	return data
 }
 
