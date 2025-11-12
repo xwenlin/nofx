@@ -217,7 +217,7 @@ func (m *WSMonitor) subscribeAll() error {
 	for _, st := range subKlineTime {
 		err := m.combinedClient.BatchSubscribeKlines(m.symbols, st)
 		if err != nil {
-			log.Printf("⚠️  订阅%v K线失败: %v", st, err)
+			log.Printf("❌ 订阅 %s K线失败: %v", st, err)
 			return err
 		}
 	}
@@ -306,7 +306,11 @@ func (m *WSMonitor) GetCurrentKlines(symbol string, _time string) ([]Kline, erro
 	// 尝试从缓存中获取
 	value, exists := m.getKlineDataMap(_time).Load(symbol)
 	if exists {
-		return value.([]Kline), nil
+		// ✅ FIX: 返回深拷贝而非引用，避免并发竞态条件
+		klines := value.([]Kline)
+		result := make([]Kline, len(klines))
+		copy(result, klines)
+		return result, nil
 	}
 
 	// 如果缓存中没有数据，使用 HTTP API 获取（兼容模式）
@@ -334,7 +338,10 @@ func (m *WSMonitor) GetCurrentKlines(symbol string, _time string) ([]Kline, erro
 		}()
 	}
 
-	return klines, nil
+	// ✅ FIX: 返回深拷贝而非引用
+	result := make([]Kline, len(klines))
+	copy(result, klines)
+	return result, nil	
 }
 
 func (m *WSMonitor) Close() {

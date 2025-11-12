@@ -24,10 +24,19 @@ export const getLinkPath = (path: string): string => {
   return `${baseWithoutSlash}${path}`;
 };
 
+// 获取完整路径的工具函数（带base路径）
+export const getFullPath = (path: string): string => {
+  const base = import.meta.env.BASE_URL || '/';
+  // 确保base以/结尾，path以/开头
+  if (base === '/') return path;
+  if (path === '/' || path === '') return base.slice(0, -1); // 移除base末尾的/
+  return base.slice(0, -1) + path;
+};
+
 interface IconProps {
-  width?: number;
-  height?: number;
-  className?: string;
+  width?: number
+  height?: number
+  className?: string
 }
 
 // 获取AI模型图标的函数
@@ -45,7 +54,7 @@ export const getModelIcon = (modelType: string, props: IconProps = {}) => {
       iconPath = getIconPath('qwen.svg');
       break;
     default:
-      return null;
+      return null
   }
 
   return (
@@ -57,5 +66,5 @@ export const getModelIcon = (modelType: string, props: IconProps = {}) => {
       className={props.className}
       style={{ borderRadius: '50%' }}
     />
-  );
-};
+  )
+}

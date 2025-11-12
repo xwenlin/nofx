@@ -36,9 +36,18 @@ type Trader interface {
 	// SetTakeProfit 设置止盈单
 	SetTakeProfit(symbol string, positionSide string, quantity, takeProfitPrice float64) error
 
+	// CancelStopLossOrders 仅取消止损单（修复 BUG：调整止损时不删除止盈）
+	CancelStopLossOrders(symbol string) error
+
+	// CancelTakeProfitOrders 仅取消止盈单（修复 BUG：调整止盈时不删除止损）
+	CancelTakeProfitOrders(symbol string) error
+
 	// CancelAllOrders 取消该币种的所有挂单
 	// positionSide: 可选参数，如果指定则只取消该方向的订单（"LONG" 或 "SHORT"），不指定则取消所有方向的订单
 	CancelAllOrders(symbol string, positionSide ...string) error
+
+	// CancelStopOrders 取消该币种的止盈/止损单（用于调整止盈止损位置）
+	CancelStopOrders(symbol string) error
 
 	// FormatQuantity 格式化数量到正确的精度
 	FormatQuantity(symbol string, quantity float64) (string, error)
