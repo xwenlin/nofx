@@ -297,14 +297,14 @@ func (m *WSMonitor) processKlineUpdate(symbol string, wsData KlineWSData, _time 
 	klineDataMap.Store(symbol, klines)
 }
 
-func (m *WSMonitor) GetCurrentKlines(symbol string, _time string) ([]Kline, error) {
+func (m *WSMonitor) GetCurrentKlines(symbol string, duration string) ([]Kline, error) {
 	// 检查 WebSocket 是否可用
 	m.mu.RLock()
 	wsEnabled := m.wsEnabled
 	m.mu.RUnlock()
 
 	// 尝试从缓存中获取
-	value, exists := m.getKlineDataMap(_time).Load(symbol)
+	value, exists := m.getKlineDataMap(duration).Load(symbol)
 	if exists {
 		// ✅ FIX: 返回深拷贝而非引用，避免并发竞态条件
 		klines := value.([]Kline)
@@ -315,22 +315,22 @@ func (m *WSMonitor) GetCurrentKlines(symbol string, _time string) ([]Kline, erro
 
 	// 如果缓存中没有数据，使用 HTTP API 获取（兼容模式）
 	apiClient := NewAPIClient()
-	klines, err := apiClient.GetKlines(symbol, _time, 100)
+	klines, err := apiClient.GetKlines(symbol, duration, 100)
 	if err != nil {
-		return nil, fmt.Errorf("获取%v分钟K线失败: %v", _time, err)
+		return nil, fmt.Errorf("获取%v分钟K线失败: %v", duration, err)
 	}
 
 	// 缓存数据（即使 WebSocket 不可用，也缓存以便后续使用）
-	m.getKlineDataMap(_time).Store(strings.ToUpper(symbol), klines)
+	m.getKlineDataMap(duration).Store(strings.ToUpper(symbol), klines)
 
 	// 如果 WebSocket 可用，尝试动态订阅（不影响主流程）
 	if wsEnabled && m.combinedClient != nil {
 		go func() {
-			subStr := m.subscribeSymbol(symbol, _time)
+			subStr := m.subscribeSymbol(symbol, duration)
 			if len(subStr) > 0 {
 				subErr := m.combinedClient.subscribeStreams(subStr)
 				if subErr != nil {
-					log.Printf("⚠️  动态订阅%v分钟K线失败（不影响使用）: %v", _time, subErr)
+					log.Printf("⚠️  动态订阅%v分钟K线失败（不影响使用）: %v", duration, subErr)
 				} else {
 					log.Printf("✅ 动态订阅流: %v", subStr)
 				}
@@ -341,7 +341,7 @@ func (m *WSMonitor) GetCurrentKlines(symbol string, _time string) ([]Kline, erro
 	// ✅ FIX: 返回深拷贝而非引用
 	result := make([]Kline, len(klines))
 	copy(result, klines)
-	return result, nil	
+	return result, nil
 }
 
 func (m *WSMonitor) Close() {

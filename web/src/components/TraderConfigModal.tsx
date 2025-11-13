@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react'
-import type { AIModel, Exchange, CreateTraderRequest } from '../types'
+import { X as IconX, Pencil, Plus } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { toast } from 'sonner'
 import { useLanguage } from '../contexts/LanguageContext'
 import { t } from '../i18n/translations'
-import { toast } from 'sonner'
-import { Pencil, Plus, X as IconX } from 'lucide-react'
+import type { AIModel, CreateTraderRequest, Exchange } from '../types'
 
 // 提取下划线后面的名称部分
 function getShortName(fullName: string): string {
@@ -25,7 +25,7 @@ interface TraderConfigData {
   is_cross_margin: boolean
   use_coin_pool: boolean
   use_oi_top: boolean
-  initial_balance: number
+  initial_balance?: number // 可选：创建时不需要，编辑时使用
   scan_interval_minutes: number
 }
 
@@ -40,168 +40,168 @@ interface TraderConfigModalProps {
 }
 
 export function TraderConfigModal({
-    isOpen,
-    onClose,
-    traderData,
-    isEditMode = false,
-    availableModels = [],
-    availableExchanges = [],
-    onSave
-  }: TraderConfigModalProps) {
-    const { language } = useLanguage()
-    const [formData, setFormData] = useState<TraderConfigData>({
-      trader_name: '',
-      ai_model: '',
-      exchange_id: '',
-      btc_eth_leverage: 5,
-      altcoin_leverage: 3,
-      trading_symbols: '',
-      custom_prompt: '',
-      override_base_prompt: false,
-      system_prompt_template: 'default',
-      is_cross_margin: true,
-      use_coin_pool: false,
-      use_oi_top: false,
-      initial_balance: 1000,
-      scan_interval_minutes: 3,
-    })
-    const [isSaving, setIsSaving] = useState(false)
-    const [availableCoins, setAvailableCoins] = useState<string[]>([])
-    const [selectedCoins, setSelectedCoins] = useState<string[]>([])
-    const [showCoinSelector, setShowCoinSelector] = useState(false)
-    const [promptTemplates, setPromptTemplates] = useState<{ name: string }[]>([])
-    const [isFetchingBalance, setIsFetchingBalance] = useState(false)
-    const [balanceFetchError, setBalanceFetchError] = useState<string>('')
+  isOpen,
+  onClose,
+  traderData,
+  isEditMode = false,
+  availableModels = [],
+  availableExchanges = [],
+  onSave
+}: TraderConfigModalProps) {
+  const { language } = useLanguage()
+  const [formData, setFormData] = useState<TraderConfigData>({
+    trader_name: '',
+    ai_model: '',
+    exchange_id: '',
+    btc_eth_leverage: 5,
+    altcoin_leverage: 3,
+    trading_symbols: '',
+    custom_prompt: '',
+    override_base_prompt: false,
+    system_prompt_template: 'default',
+    is_cross_margin: true,
+    use_coin_pool: false,
+    use_oi_top: false,
+    initial_balance: 1000,
+    scan_interval_minutes: 3,
+  })
+  const [isSaving, setIsSaving] = useState(false)
+  const [availableCoins, setAvailableCoins] = useState<string[]>([])
+  const [selectedCoins, setSelectedCoins] = useState<string[]>([])
+  const [showCoinSelector, setShowCoinSelector] = useState(false)
+  const [promptTemplates, setPromptTemplates] = useState<{ name: string }[]>([])
+  const [isFetchingBalance, setIsFetchingBalance] = useState(false)
+  const [balanceFetchError, setBalanceFetchError] = useState<string>('')
 
-    useEffect(() => {
-      if (traderData) {
-        console.log('traderData', traderData);
-        console.log('availableModels', availableModels);
-        // 后端返回的 ai_model 可能是 provider（如 "deepseek"），需要匹配到 allModels 中的实际 ID
-        let aiModelId = traderData.ai_model;
+  useEffect(() => {
+    if (traderData) {
+      console.log('traderData', traderData);
+      console.log('availableModels', availableModels);
+      // 后端返回的 ai_model 可能是 provider（如 "deepseek"），需要匹配到 allModels 中的实际 ID
+      let aiModelId = traderData.ai_model;
 
-        // 尝试通过 ID 直接匹配
-        let matchedModel = availableModels.find(m => m.id === aiModelId);
+      // 尝试通过 ID 直接匹配
+      let matchedModel = availableModels.find(m => m.id === aiModelId);
 
-        // 如果找不到，尝试通过 provider 匹配
-        if (!matchedModel) {
-          matchedModel = availableModels.find(m =>
-            m.provider === aiModelId ||
-            m.id === aiModelId ||
-            (m.id && m.id.endsWith('_' + aiModelId)) ||
-            (m.id && m.id.split('_').pop() === aiModelId)
-          );
-        }
-
-        // 如果找到了匹配的模型，使用它的 ID
-        if (matchedModel) {
-          aiModelId = matchedModel.id;
-        }
-
-        setFormData({
-          ...traderData,
-          ai_model: aiModelId  // 使用匹配到的模型 ID
-        });
-
-        // 设置已选择的币种
-        if (traderData.trading_symbols) {
-          const coins = traderData.trading_symbols
-            .split(',')
-            .map((s) => s.trim())
-            .filter((s) => s)
-          setSelectedCoins(coins)
-        }
-      } else if (!isEditMode) {
-        setFormData({
-          trader_name: '',
-          ai_model: availableModels[0]?.id || '',
-          exchange_id: availableExchanges[0]?.id || '',
-          btc_eth_leverage: 5,
-          altcoin_leverage: 3,
-          trading_symbols: '',
-          custom_prompt: '',
-          override_base_prompt: false,
-          system_prompt_template: 'default',
-          is_cross_margin: true,
-          use_coin_pool: false,
-          use_oi_top: false,
-          initial_balance: 1000,
-          scan_interval_minutes: 3,
-        })
+      // 如果找不到，尝试通过 provider 匹配
+      if (!matchedModel) {
+        matchedModel = availableModels.find(m =>
+          m.provider === aiModelId ||
+          m.id === aiModelId ||
+          (m.id && m.id.endsWith('_' + aiModelId)) ||
+          (m.id && m.id.split('_').pop() === aiModelId)
+        );
       }
-      // 确保旧数据也有默认的 system_prompt_template
-      if (traderData && traderData.system_prompt_template === undefined) {
-        setFormData((prev) => ({
-          ...prev,
-          system_prompt_template: 'default',
-        }))
+
+      // 如果找到了匹配的模型，使用它的 ID
+      if (matchedModel) {
+        aiModelId = matchedModel.id;
       }
-    }, [traderData, isEditMode, availableModels, availableExchanges])
 
-    // 获取系统配置中的币种列表
-    useEffect(() => {
-      const fetchConfig = async () => {
-        try {
-          const response = await fetch('/nofx-api/config');
-          const config = await response.json();
-          if (config.default_coins) {
-            setAvailableCoins(config.default_coins)
-          }
-        } catch (error) {
-          console.error('Failed to fetch config:', error)
-          // 使用默认币种列表
-          setAvailableCoins([
-            'BTCUSDT',
-            'ETHUSDT',
-            'SOLUSDT',
-            'BNBUSDT',
-            'XRPUSDT',
-            'DOGEUSDT',
-            'ADAUSDT',
-          ])
-        }
-      }
-      fetchConfig()
-    }, [])
+      setFormData({
+        ...traderData,
+        ai_model: aiModelId  // 使用匹配到的模型 ID
+      });
 
-    // 获取系统提示词模板列表
-    useEffect(() => {
-      const fetchPromptTemplates = async () => {
-        try {
-          const response = await fetch('/nofx-api/prompt-templates');
-          const data = await response.json();
-          if (data.templates) {
-            setPromptTemplates(data.templates)
-          }
-        } catch (error) {
-          console.error('Failed to fetch prompt templates:', error)
-          // 使用默认模板列表
-          setPromptTemplates([{ name: 'default' }, { name: 'aggressive' }]);
-        }
-      }
-      fetchPromptTemplates()
-    }, [])
-
-    // 当选择的币种改变时，更新输入框
-    useEffect(() => {
-      const symbolsString = selectedCoins.join(',')
-      setFormData((prev) => ({ ...prev, trading_symbols: symbolsString }))
-    }, [selectedCoins])
-
-    if (!isOpen) return null
-
-    const handleInputChange = (field: keyof TraderConfigData, value: any) => {
-      setFormData(prev => ({ ...prev, [field]: value }));
-
-      // 如果是直接编辑trading_symbols，同步更新selectedCoins
-      if (field === 'trading_symbols') {
-        const coins = value
+      // 设置已选择的币种
+      if (traderData.trading_symbols) {
+        const coins = traderData.trading_symbols
           .split(',')
-          .map((s: string) => s.trim())
-          .filter((s: string) => s)
+          .map((s) => s.trim())
+          .filter((s) => s)
         setSelectedCoins(coins)
       }
+    } else if (!isEditMode) {
+      setFormData({
+        trader_name: '',
+        ai_model: availableModels[0]?.id || '',
+        exchange_id: availableExchanges[0]?.id || '',
+        btc_eth_leverage: 5,
+        altcoin_leverage: 3,
+        trading_symbols: '',
+        custom_prompt: '',
+        override_base_prompt: false,
+        system_prompt_template: 'default',
+        is_cross_margin: true,
+        use_coin_pool: false,
+        use_oi_top: false,
+        initial_balance: 1000,
+        scan_interval_minutes: 3,
+      })
     }
+    // 确保旧数据也有默认的 system_prompt_template
+    if (traderData && traderData.system_prompt_template === undefined) {
+      setFormData((prev) => ({
+        ...prev,
+        system_prompt_template: 'default',
+      }))
+    }
+  }, [traderData, isEditMode, availableModels, availableExchanges])
+
+  // 获取系统配置中的币种列表
+  useEffect(() => {
+    const fetchConfig = async () => {
+      try {
+        const response = await fetch('/nofx-api/config');
+        const config = await response.json();
+        if (config.default_coins) {
+          setAvailableCoins(config.default_coins)
+        }
+      } catch (error) {
+        console.error('Failed to fetch config:', error)
+        // 使用默认币种列表
+        setAvailableCoins([
+          'BTCUSDT',
+          'ETHUSDT',
+          'SOLUSDT',
+          'BNBUSDT',
+          'XRPUSDT',
+          'DOGEUSDT',
+          'ADAUSDT',
+        ])
+      }
+    }
+    fetchConfig()
+  }, [])
+
+  // 获取系统提示词模板列表
+  useEffect(() => {
+    const fetchPromptTemplates = async () => {
+      try {
+        const response = await fetch('/nofx-api/prompt-templates');
+        const data = await response.json();
+        if (data.templates) {
+          setPromptTemplates(data.templates)
+        }
+      } catch (error) {
+        console.error('Failed to fetch prompt templates:', error)
+        // 使用默认模板列表
+        setPromptTemplates([{ name: 'default' }, { name: 'aggressive' }]);
+      }
+    }
+    fetchPromptTemplates()
+  }, [])
+
+  // 当选择的币种改变时，更新输入框
+  useEffect(() => {
+    const symbolsString = selectedCoins.join(',')
+    setFormData((prev) => ({ ...prev, trading_symbols: symbolsString }))
+  }, [selectedCoins])
+
+  if (!isOpen) return null
+
+  const handleInputChange = (field: keyof TraderConfigData, value: any) => {
+    setFormData(prev => ({ ...prev, [field]: value }));
+
+    // 如果是直接编辑trading_symbols，同步更新selectedCoins
+    if (field === 'trading_symbols') {
+      const coins = value
+        .split(',')
+        .map((s: string) => s.trim())
+        .filter((s: string) => s)
+      setSelectedCoins(coins)
+    }
+  }
 
   const handleCoinToggle = (coin: string) => {
     setSelectedCoins((prev) => {
@@ -217,14 +217,14 @@ export function TraderConfigModal({
     })
   }
 
-    const handleFetchCurrentBalance = async () => {
-      if (!isEditMode || !traderData?.trader_id) {
-        setBalanceFetchError('只有在编辑模式下才能获取当前余额')
-        return
-      }
+  const handleFetchCurrentBalance = async () => {
+    if (!isEditMode || !traderData?.trader_id) {
+      setBalanceFetchError('只有在编辑模式下才能获取当前余额')
+      return
+    }
 
-      setIsFetchingBalance(true)
-      setBalanceFetchError('')
+    setIsFetchingBalance(true)
+    setBalanceFetchError('')
 
     try {
       const token = localStorage.getItem('auth_token')
@@ -241,15 +241,15 @@ export function TraderConfigModal({
         }
       )
 
-        if (!response.ok) {
-          throw new Error('获取账户余额失败')
-        }
+      if (!response.ok) {
+        throw new Error('获取账户余额失败')
+      }
 
-        const data = await response.json()
+      const data = await response.json()
 
-        // total_equity = 当前账户净值（包含未实现盈亏）
-        // 这应该作为新的初始余额
-        const currentBalance = data.total_equity || data.balance || 0
+      // total_equity = 当前账户净值（包含未实现盈亏）
+      // 这应该作为新的初始余额
+      const currentBalance = data.total_equity || data.balance || 0
 
       setFormData((prev) => ({ ...prev, initial_balance: currentBalance }))
       toast.success('已获取当前余额')
@@ -262,8 +262,8 @@ export function TraderConfigModal({
     }
   }
 
-    const handleSave = async () => {
-      if (!onSave) return
+  const handleSave = async () => {
+    if (!onSave) return
 
     setIsSaving(true)
     try {
@@ -280,9 +280,14 @@ export function TraderConfigModal({
         is_cross_margin: formData.is_cross_margin,
         use_coin_pool: formData.use_coin_pool,
         use_oi_top: formData.use_oi_top,
-        initial_balance: formData.initial_balance,
         scan_interval_minutes: formData.scan_interval_minutes,
       }
+
+      // 只在编辑模式时包含initial_balance（用于手动更新）
+      if (isEditMode && formData.initial_balance !== undefined) {
+        saveData.initial_balance = formData.initial_balance
+      }
+
       await toast.promise(onSave(saveData), {
         loading: '正在保存…',
         success: '保存成功',
@@ -414,11 +419,10 @@ export function TraderConfigModal({
                     <button
                       type="button"
                       onClick={() => handleInputChange('is_cross_margin', true)}
-                      className={`flex-1 px-3 py-2 rounded text-sm ${
-                        formData.is_cross_margin
+                      className={`flex-1 px-3 py-2 rounded text-sm ${formData.is_cross_margin
                           ? 'bg-[#F0B90B] text-black'
                           : 'bg-[#0B0E11] text-[#848E9C] border border-[#2B3139]'
-                      }`}
+                        }`}
                     >
                       全仓
                     </button>
@@ -427,25 +431,21 @@ export function TraderConfigModal({
                       onClick={() =>
                         handleInputChange('is_cross_margin', false)
                       }
-                      className={`flex-1 px-3 py-2 rounded text-sm ${
-                        !formData.is_cross_margin
+                      className={`flex-1 px-3 py-2 rounded text-sm ${!formData.is_cross_margin
                           ? 'bg-[#F0B90B] text-black'
                           : 'bg-[#0B0E11] text-[#848E9C] border border-[#2B3139]'
-                      }`}
+                        }`}
                     >
                       逐仓
                     </button>
                   </div>
                 </div>
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="text-sm text-[#EAECEF]">
-                      初始余额 ($)
-                      {!isEditMode && (
-                        <span className="text-[#F0B90B] ml-1">*</span>
-                      )}
-                    </label>
-                    {isEditMode && (
+                {isEditMode && (
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-sm text-[#EAECEF]">
+                        初始余额 ($)
+                      </label>
                       <button
                         type="button"
                         onClick={handleFetchCurrentBalance}
@@ -454,33 +454,46 @@ export function TraderConfigModal({
                       >
                         {isFetchingBalance ? '获取中...' : '获取当前余额'}
                       </button>
+                    </div>
+                    <input
+                      type="number"
+                      value={formData.initial_balance || 0}
+                      onChange={(e) =>
+                        handleInputChange(
+                          'initial_balance',
+                          Number(e.target.value)
+                        )
+                      }
+                      onBlur={(e) => {
+                        // Force minimum value on blur
+                        const value = Number(e.target.value)
+                        if (value < 100) {
+                          handleInputChange('initial_balance', 100)
+                        }
+                      }}
+                      className="w-full px-3 py-2 bg-[#0B0E11] border border-[#2B3139] rounded text-[#EAECEF] focus:border-[#F0B90B] focus:outline-none"
+                      min="100"
+                      step="0.01"
+                    />
+                    <p className="text-xs text-[#848E9C] mt-1">
+                      用于手动更新初始余额基准（例如充值/提现后）
+                    </p>
+                    {balanceFetchError && (
+                      <p className="text-xs text-red-500 mt-1">
+                        {balanceFetchError}
+                      </p>
                     )}
                   </div>
-                  <input
-                    type="number"
-                    value={formData.initial_balance}
-                    onChange={(e) =>
-                      handleInputChange(
-                        'initial_balance',
-                        Number(e.target.value)
-                      )
-                    }
-                    onBlur={(e) => {
-                      // Force minimum value on blur
-                      const value = Number(e.target.value)
-                      if (value < 100) {
-                        handleInputChange('initial_balance', 100)
-                      }
-                    }}
-                    className="w-full px-3 py-2 bg-[#0B0E11] border border-[#2B3139] rounded text-[#EAECEF] focus:border-[#F0B90B] focus:outline-none"
-                    min="100"
-                    step="0.01"
-                  />
-                  {!isEditMode && (
-                    <p className="text-xs text-[#F0B90B] mt-1 flex items-center gap-1">
+                )}
+                {!isEditMode && (
+                  <div>
+                    <label className="text-sm text-[#EAECEF] mb-2 block">
+                      初始余额
+                    </label>
+                    <div className="w-full px-3 py-2 bg-[#1E2329] border border-[#2B3139] rounded text-[#848E9C] flex items-center gap-2">
                       <svg
                         xmlns="http://www.w3.org/2000/svg"
-                        className="w-3.5 h-3.5"
+                        className="w-4 h-4 text-[#F0B90B]"
                         viewBox="0 0 24 24"
                         fill="none"
                         stroke="currentColor"
@@ -488,179 +501,171 @@ export function TraderConfigModal({
                         strokeLinecap="round"
                         strokeLinejoin="round"
                       >
-                        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
-                        <line x1="12" x2="12" y1="9" y2="13" />
-                        <line x1="12" x2="12.01" y1="17" y2="17" />
+                        <circle cx="12" cy="12" r="10" />
+                        <line x1="12" x2="12" y1="8" y2="12" />
+                        <line x1="12" x2="12.01" y1="16" y2="16" />
                       </svg>
-                      请输入您交易所账户的当前实际余额。如果输入不准确，P&L统计将会错误。
-                    </p>
-                  )}
-                  {isEditMode && (
-                    <p className="text-xs text-[#848E9C] mt-1">
-                      点击"获取当前余额"按钮可自动获取您交易所账户的当前净值
-                    </p>
-                  )}
-                  {balanceFetchError && (
-                    <p className="text-xs text-red-500 mt-1">
-                      {balanceFetchError}
-                    </p>
-                  )}
-                </div>
+                      <span className="text-sm">
+                        系统将自动获取您的账户净值作为初始余额
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
 
-                {/* 第二行：AI 扫描决策间隔 */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-sm text-[#EAECEF] block mb-2">
-                      {t('aiScanInterval', language)}
-                    </label>
-                    <input
-                      type="number"
-                      value={formData.scan_interval_minutes}
-                      onChange={(e) => {
-                        const parsedValue = Number(e.target.value)
-                        const safeValue = Number.isFinite(parsedValue)
-                          ? Math.max(3, parsedValue)
-                          : 3
-                        handleInputChange('scan_interval_minutes', safeValue)
-                      }}
-                      className="w-full px-3 py-2 bg-[#0B0E11] border border-[#2B3139] rounded text-[#EAECEF] focus:border-[#F0B90B] focus:outline-none"
-                      min="3"
-                      max="60"
-                      step="1"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      {t('scanIntervalRecommend', language)}
-                    </p>
-                  </div>
-                  <div></div>
-                </div>
-
-                {/* 第三行：杠杆设置 */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-sm text-[#EAECEF] block mb-2">
-                      BTC/ETH 杠杆
-                    </label>
-                    <input
-                      type="number"
-                      value={formData.btc_eth_leverage}
-                      onChange={(e) =>
-                        handleInputChange(
-                          'btc_eth_leverage',
-                          Number(e.target.value)
-                        )
-                      }
-                      className="w-full px-3 py-2 bg-[#0B0E11] border border-[#2B3139] rounded text-[#EAECEF] focus:border-[#F0B90B] focus:outline-none"
-                      min="1"
-                      max="125"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-sm text-[#EAECEF] block mb-2">
-                      山寨币杠杆
-                    </label>
-                    <input
-                      type="number"
-                      value={formData.altcoin_leverage}
-                      onChange={(e) =>
-                        handleInputChange(
-                          'altcoin_leverage',
-                          Number(e.target.value)
-                        )
-                      }
-                      className="w-full px-3 py-2 bg-[#0B0E11] border border-[#2B3139] rounded text-[#EAECEF] focus:border-[#F0B90B] focus:outline-none"
-                      min="1"
-                      max="75"
-                    />
-                  </div>
-                </div>
-
-                {/* 第三行：交易币种 */}
+              {/* 第二行：AI 扫描决策间隔 */}
+              <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="text-sm text-[#EAECEF]">
-                      交易币种 (用逗号分隔，留空使用默认)
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => setShowCoinSelector(!showCoinSelector)}
-                      className="px-3 py-1 text-xs bg-[#F0B90B] text-black rounded hover:bg-[#E1A706] transition-colors"
-                    >
-                      {showCoinSelector ? '收起选择' : '快速选择'}
-                    </button>
-                  </div>
+                  <label className="text-sm text-[#EAECEF] block mb-2">
+                    {t('aiScanInterval', language)}
+                  </label>
                   <input
-                    type="text"
-                    value={formData.trading_symbols}
+                    type="number"
+                    value={formData.scan_interval_minutes}
+                    onChange={(e) => {
+                      const parsedValue = Number(e.target.value)
+                      const safeValue = Number.isFinite(parsedValue)
+                        ? Math.max(3, parsedValue)
+                        : 3
+                      handleInputChange('scan_interval_minutes', safeValue)
+                    }}
+                    className="w-full px-3 py-2 bg-[#0B0E11] border border-[#2B3139] rounded text-[#EAECEF] focus:border-[#F0B90B] focus:outline-none"
+                    min="3"
+                    max="60"
+                    step="1"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    {t('scanIntervalRecommend', language)}
+                  </p>
+                </div>
+                <div></div>
+              </div>
+
+              {/* 第三行：杠杆设置 */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm text-[#EAECEF] block mb-2">
+                    BTC/ETH 杠杆
+                  </label>
+                  <input
+                    type="number"
+                    value={formData.btc_eth_leverage}
                     onChange={(e) =>
-                      handleInputChange('trading_symbols', e.target.value)
+                      handleInputChange(
+                        'btc_eth_leverage',
+                        Number(e.target.value)
+                      )
                     }
                     className="w-full px-3 py-2 bg-[#0B0E11] border border-[#2B3139] rounded text-[#EAECEF] focus:border-[#F0B90B] focus:outline-none"
-                    placeholder="例如: BTCUSDT,ETHUSDT,ADAUSDT"
+                    min="1"
+                    max="125"
                   />
+                </div>
+                <div>
+                  <label className="text-sm text-[#EAECEF] block mb-2">
+                    山寨币杠杆
+                  </label>
+                  <input
+                    type="number"
+                    value={formData.altcoin_leverage}
+                    onChange={(e) =>
+                      handleInputChange(
+                        'altcoin_leverage',
+                        Number(e.target.value)
+                      )
+                    }
+                    className="w-full px-3 py-2 bg-[#0B0E11] border border-[#2B3139] rounded text-[#EAECEF] focus:border-[#F0B90B] focus:outline-none"
+                    min="1"
+                    max="75"
+                  />
+                </div>
+              </div>
 
-                  {/* 币种选择器 */}
-                  {showCoinSelector && (
-                    <div className="mt-3 p-3 bg-[#0B0E11] border border-[#2B3139] rounded">
-                      <div className="text-xs text-[#848E9C] mb-2">
-                        点击选择币种：
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {availableCoins.map((coin) => (
-                          <button
-                            key={coin}
-                            type="button"
-                            onClick={() => handleCoinToggle(coin)}
-                            className={`px-2 py-1 text-xs rounded transition-colors ${selectedCoins.includes(coin)
-                              ? 'bg-[#F0B90B] text-black'
-                              : 'bg-[#1E2329] text-[#848E9C] border border-[#2B3139] hover:border-[#F0B90B]'
-                              }`}
-                          >
-                            {coin.replace('USDT', '')}
-                          </button>
-                        ))}
-                      </div>
+              {/* 第三行：交易币种 */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-sm text-[#EAECEF]">
+                    交易币种 (用逗号分隔，留空使用默认)
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setShowCoinSelector(!showCoinSelector)}
+                    className="px-3 py-1 text-xs bg-[#F0B90B] text-black rounded hover:bg-[#E1A706] transition-colors"
+                  >
+                    {showCoinSelector ? '收起选择' : '快速选择'}
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  value={formData.trading_symbols}
+                  onChange={(e) =>
+                    handleInputChange('trading_symbols', e.target.value)
+                  }
+                  className="w-full px-3 py-2 bg-[#0B0E11] border border-[#2B3139] rounded text-[#EAECEF] focus:border-[#F0B90B] focus:outline-none"
+                  placeholder="例如: BTCUSDT,ETHUSDT,ADAUSDT"
+                />
+
+                {/* 币种选择器 */}
+                {showCoinSelector && (
+                  <div className="mt-3 p-3 bg-[#0B0E11] border border-[#2B3139] rounded">
+                    <div className="text-xs text-[#848E9C] mb-2">
+                      点击选择币种：
                     </div>
-                  )}
-                </div>
+                    <div className="flex flex-wrap gap-2">
+                      {availableCoins.map((coin) => (
+                        <button
+                          key={coin}
+                          type="button"
+                          onClick={() => handleCoinToggle(coin)}
+                          className={`px-2 py-1 text-xs rounded transition-colors ${selectedCoins.includes(coin)
+                            ? 'bg-[#F0B90B] text-black'
+                            : 'bg-[#1E2329] text-[#848E9C] border border-[#2B3139] hover:border-[#F0B90B]'
+                            }`}
+                        >
+                          {coin.replace('USDT', '')}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
+          </div>
 
-            {/* Signal Sources */}
-            <div className="bg-[#0B0E11] border border-[#2B3139] rounded-lg p-5">
-              <h3 className="text-lg font-semibold text-[#EAECEF] mb-5 flex items-center gap-2">
-                📡 信号源配置
-              </h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="flex items-center gap-3">
-                  <input
-                    type="checkbox"
-                    checked={formData.use_coin_pool}
-                    onChange={(e) =>
-                      handleInputChange('use_coin_pool', e.target.checked)
-                    }
-                    className="w-4 h-4"
-                  />
-                  <label className="text-sm text-[#EAECEF]">
-                    使用 Coin Pool 信号
-                  </label>
-                </div>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="checkbox"
-                    checked={formData.use_oi_top}
-                    onChange={(e) =>
-                      handleInputChange('use_oi_top', e.target.checked)
-                    }
-                    className="w-4 h-4"
-                  />
-                  <label className="text-sm text-[#EAECEF]">
-                    使用 OI Top 信号
-                  </label>
-                </div>
+          {/* Signal Sources */}
+          <div className="bg-[#0B0E11] border border-[#2B3139] rounded-lg p-5">
+            <h3 className="text-lg font-semibold text-[#EAECEF] mb-5 flex items-center gap-2">
+              📡 信号源配置
+            </h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={formData.use_coin_pool}
+                  onChange={(e) =>
+                    handleInputChange('use_coin_pool', e.target.checked)
+                  }
+                  className="w-4 h-4"
+                />
+                <label className="text-sm text-[#EAECEF]">
+                  使用 Coin Pool 信号
+                </label>
+              </div>
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={formData.use_oi_top}
+                  onChange={(e) =>
+                    handleInputChange('use_oi_top', e.target.checked)
+                  }
+                  className="w-4 h-4"
+                />
+                <label className="text-sm text-[#EAECEF]">
+                  使用 OI Top 信号
+                </label>
               </div>
             </div>
+          </div>
 
           {/* Trading Prompt */}
           <div className="bg-[#0B0E11] border border-[#2B3139] rounded-lg p-5">
@@ -754,56 +759,56 @@ export function TraderConfigModal({
                 </p>
               </div>
 
-                <div className="flex items-center gap-3">
-                  <input
-                    type="checkbox"
-                    checked={formData.override_base_prompt}
-                    onChange={(e) =>
-                      handleInputChange('override_base_prompt', e.target.checked)
-                    }
-                    className="w-4 h-4"
-                  />
-                  <label className="text-sm text-[#EAECEF]">覆盖默认提示词</label>
-                  <span className="text-xs text-[#F0B90B] inline-flex items-center gap-1">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      className="w-3.5 h-3.5"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
-                      <line x1="12" x2="12" y1="9" y2="13" />
-                      <line x1="12" x2="12.01" y1="17" y2="17" />
-                    </svg>{' '}
-                    启用后将完全替换默认策略
-                  </span>
-                </div>
-                <div>
-                  <label className="text-sm text-[#EAECEF] block mb-2">
-                    {formData.override_base_prompt
-                      ? '自定义提示词'
-                      : '附加提示词'}
-                  </label>
-                  <textarea
-                    value={formData.custom_prompt}
-                    onChange={(e) =>
-                      handleInputChange('custom_prompt', e.target.value)
-                    }
-                    className="w-full px-3 py-2 bg-[#0B0E11] border border-[#2B3139] rounded text-[#EAECEF] focus:border-[#F0B90B] focus:outline-none h-24 resize-none"
-                    placeholder={
-                      formData.override_base_prompt
-                        ? '输入完整的交易策略提示词...'
-                        : '输入额外的交易策略提示...'
-                    }
-                  />
-                </div>
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={formData.override_base_prompt}
+                  onChange={(e) =>
+                    handleInputChange('override_base_prompt', e.target.checked)
+                  }
+                  className="w-4 h-4"
+                />
+                <label className="text-sm text-[#EAECEF]">覆盖默认提示词</label>
+                <span className="text-xs text-[#F0B90B] inline-flex items-center gap-1">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    className="w-3.5 h-3.5"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+                    <line x1="12" x2="12" y1="9" y2="13" />
+                    <line x1="12" x2="12.01" y1="17" y2="17" />
+                  </svg>{' '}
+                  启用后将完全替换默认策略
+                </span>
+              </div>
+              <div>
+                <label className="text-sm text-[#EAECEF] block mb-2">
+                  {formData.override_base_prompt
+                    ? '自定义提示词'
+                    : '附加提示词'}
+                </label>
+                <textarea
+                  value={formData.custom_prompt}
+                  onChange={(e) =>
+                    handleInputChange('custom_prompt', e.target.value)
+                  }
+                  className="w-full px-3 py-2 bg-[#0B0E11] border border-[#2B3139] rounded text-[#EAECEF] focus:border-[#F0B90B] focus:outline-none h-24 resize-none"
+                  placeholder={
+                    formData.override_base_prompt
+                      ? '输入完整的交易策略提示词...'
+                      : '输入额外的交易策略提示...'
+                  }
+                />
               </div>
             </div>
           </div>
+        </div>
 
         {/* Footer */}
         <div className="flex justify-end gap-3 p-6 border-t border-[#2B3139] bg-gradient-to-r from-[#1E2329] to-[#252B35] sticky bottom-0 z-10 rounded-b-xl">

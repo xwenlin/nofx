@@ -1400,7 +1400,6 @@ func (s *Server) handlePositions(c *gin.Context) {
 
 	positions, err := trader.GetPositions()
 	if err != nil {
-		log.Printf("❌ 获取持仓列表失败 [%s]: %v", trader.GetName(), err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("获取持仓列表失败: %v", err),
 		})
@@ -1427,7 +1426,6 @@ func (s *Server) handleDecisions(c *gin.Context) {
 	// 获取所有历史决策记录（无限制）
 	records, err := trader.GetDecisionLogger().GetLatestRecords(10000)
 	if err != nil {
-		log.Printf("❌ 获取决策日志失败 [%s]: %v", trader.GetName(), err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("获取决策日志失败: %v", err),
 		})
@@ -1461,9 +1459,8 @@ func (s *Server) handleLatestDecisions(c *gin.Context) {
 
 	records, err := trader.GetDecisionLogger().GetLatestRecords(limit)
 	if err != nil {
-		log.Printf("❌ 获取最新决策日志失败 [%s]: %v", trader.GetName(), err)
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": fmt.Sprintf("获取最新决策日志失败: %v", err),
+			"error": fmt.Sprintf("获取决策日志失败: %v", err),
 		})
 		return
 	}
@@ -1493,7 +1490,6 @@ func (s *Server) handleStatistics(c *gin.Context) {
 
 	stats, err := trader.GetDecisionLogger().GetStatistics()
 	if err != nil {
-		log.Printf("❌ 获取统计信息失败 [%s]: %v", trader.GetName(), err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("获取统计信息失败: %v", err),
 		})
@@ -1542,7 +1538,6 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 	// 每3分钟一个周期：10000条 = 约20天的数据
 	records, err := trader.GetDecisionLogger().GetLatestRecords(10000)
 	if err != nil {
-		log.Printf("❌ 获取历史数据失败 [%s]: %v", trader.GetName(), err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("获取历史数据失败: %v", err),
 		})
@@ -1630,7 +1625,6 @@ func (s *Server) handlePerformance(c *gin.Context) {
 	// 即使开仓记录在窗口外，也会从更早的历史记录中查找匹配
 	performance, err := trader.GetDecisionLogger().AnalyzePerformance(1000)
 	if err != nil {
-		log.Printf("❌ 分析历史表现失败 [%s]: %v", trader.GetName(), err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("分析历史表现失败: %v", err),
 		})
