@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Menu, X, ChevronDown } from 'lucide-react'
+import { ChevronDown, Menu, X } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { t, type Language } from '../i18n/translations'
 import { Container } from './Container'
+import { getIconPath } from './ModelIcons'
 
 interface HeaderBarProps {
   onLoginClick?: () => void
@@ -65,7 +66,7 @@ export default function HeaderBar({
           to="/"
           className="flex items-center gap-3 hover:opacity-80 transition-opacity cursor-pointer"
         >
-          <img src="/icons/nofx.svg" alt="NOFX Logo" className="w-8 h-8" />
+          <img src={getIconPath('nofx.svg')} alt="NOFX Logo" className="w-8 h-8" />
           <span
             className="text-xl font-bold"
             style={{ color: 'var(--brand-yellow)' }}
@@ -250,8 +251,11 @@ export default function HeaderBar({
             ) : (
               // Landing page navigation when not logged in
               <>
-                <a
-                  href="/competition"
+                <Link
+                  to="/competition"
+                  onClick={() => {
+                    onPageChange?.('competition')
+                  }}
                   className="text-sm font-bold transition-all duration-300 relative focus:outline-2 focus:outline-yellow-500"
                   style={{
                     color:
@@ -285,10 +289,13 @@ export default function HeaderBar({
                   )}
 
                   {t('realtimeNav', language)}
-                </a>
+                </Link>
 
-                <a
-                  href="/faq"
+                <Link
+                  to="/faq"
+                  onClick={() => {
+                    onPageChange?.('faq')
+                  }}
                   className="text-sm font-bold transition-all duration-300 relative focus:outline-2 focus:outline-yellow-500"
                   style={{
                     color:
@@ -322,7 +329,7 @@ export default function HeaderBar({
                   )}
 
                   {t('faqNav', language)}
-                </a>
+                </Link>
               </>
             )}
           </div>
@@ -380,8 +387,8 @@ export default function HeaderBar({
                       border: '1px solid var(--panel-border)',
                     }}
                     onMouseEnter={(e) =>
-                      (e.currentTarget.style.background =
-                        'rgba(255, 255, 255, 0.05)')
+                    (e.currentTarget.style.background =
+                      'rgba(255, 255, 255, 0.05)')
                     }
                     onMouseLeave={(e) =>
                       (e.currentTarget.style.background = 'var(--panel-bg)')
@@ -457,15 +464,15 @@ export default function HeaderBar({
               currentPage !== 'login' &&
               currentPage !== 'register' && (
                 <div className="flex items-center gap-3">
-                  <a
-                    href="/login"
+                  <Link
+                    to="/login"
                     className="px-3 py-2 text-sm font-medium transition-colors rounded"
                     style={{ color: 'var(--brand-light-gray)' }}
                   >
                     {t('signIn', language)}
-                  </a>
-                  <a
-                    href="/register"
+                  </Link>
+                  <Link
+                    to="/register"
                     className="px-4 py-2 rounded font-semibold text-sm transition-colors hover:opacity-90"
                     style={{
                       background: 'var(--brand-yellow)',
@@ -473,7 +480,7 @@ export default function HeaderBar({
                     }}
                   >
                     {t('signUp', language)}
-                  </a>
+                  </Link>
                 </div>
               )
             )}
@@ -485,8 +492,8 @@ export default function HeaderBar({
                 className="flex items-center gap-2 px-3 py-2 rounded transition-colors"
                 style={{ color: 'var(--brand-light-gray)' }}
                 onMouseEnter={(e) =>
-                  (e.currentTarget.style.background =
-                    'rgba(255, 255, 255, 0.05)')
+                (e.currentTarget.style.background =
+                  'rgba(255, 255, 255, 0.05)')
                 }
                 onMouseLeave={(e) =>
                   (e.currentTarget.style.background = 'transparent')
@@ -511,9 +518,8 @@ export default function HeaderBar({
                       onLanguageChange?.('zh')
                       setLanguageDropdownOpen(false)
                     }}
-                    className={`w-full flex items-center gap-2 px-3 py-2 transition-colors ${
-                      language === 'zh' ? '' : 'hover:opacity-80'
-                    }`}
+                    className={`w-full flex items-center gap-2 px-3 py-2 transition-colors ${language === 'zh' ? '' : 'hover:opacity-80'
+                      }`}
                     style={{
                       color: 'var(--brand-light-gray)',
                       background:
@@ -530,9 +536,8 @@ export default function HeaderBar({
                       onLanguageChange?.('en')
                       setLanguageDropdownOpen(false)
                     }}
-                    className={`w-full flex items-center gap-2 px-3 py-2 transition-colors ${
-                      language === 'en' ? '' : 'hover:opacity-80'
-                    }`}
+                    className={`w-full flex items-center gap-2 px-3 py-2 transition-colors ${language === 'en' ? '' : 'hover:opacity-80'
+                      }`}
                     style={{
                       color: 'var(--brand-light-gray)',
                       background:
@@ -619,8 +624,12 @@ export default function HeaderBar({
               {t('realtimeNav', language)}
             </button>
           ) : (
-            <a
-              href="/competition"
+            <Link
+              to="/competition"
+              onClick={() => {
+                onPageChange?.('competition')
+                setMobileMenuOpen(false)
+              }}
               className="block text-sm font-bold transition-all duration-300 relative focus:outline-2 focus:outline-yellow-500"
               style={{
                 color:
@@ -644,7 +653,7 @@ export default function HeaderBar({
               )}
 
               {t('realtimeNav', language)}
-            </a>
+            </Link>
           )}
           {/* Only show 配置 and 看板 when logged in */}
           {isLoggedIn && (
@@ -807,11 +816,10 @@ export default function HeaderBar({
                   onLanguageChange?.('zh')
                   setMobileMenuOpen(false)
                 }}
-                className={`w-full flex items-center gap-3 px-3 py-2 rounded transition-colors ${
-                  language === 'zh'
-                    ? 'bg-yellow-500 text-black'
-                    : 'text-gray-400 hover:text-white'
-                }`}
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded transition-colors ${language === 'zh'
+                  ? 'bg-yellow-500 text-black'
+                  : 'text-gray-400 hover:text-white'
+                  }`}
               >
                 <span className="text-lg">🇨🇳</span>
                 <span className="text-sm">中文</span>
@@ -821,11 +829,10 @@ export default function HeaderBar({
                   onLanguageChange?.('en')
                   setMobileMenuOpen(false)
                 }}
-                className={`w-full flex items-center gap-3 px-3 py-2 rounded transition-colors ${
-                  language === 'en'
-                    ? 'bg-yellow-500 text-black'
-                    : 'text-gray-400 hover:text-white'
-                }`}
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded transition-colors ${language === 'en'
+                  ? 'bg-yellow-500 text-black'
+                  : 'text-gray-400 hover:text-white'
+                  }`}
               >
                 <span className="text-lg">🇺🇸</span>
                 <span className="text-sm">English</span>

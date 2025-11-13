@@ -1,5 +1,7 @@
 import { motion } from 'framer-motion'
 import { ArrowRight } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import HeaderBar from '../components/HeaderBar'
 import AboutSection from '../components/landing/AboutSection'
 import AnimatedSection from '../components/landing/AnimatedSection'
@@ -19,6 +21,23 @@ export function LandingPage() {
   const { user, logout } = useAuth()
   const { language, setLanguage } = useLanguage()
   const isLoggedIn = !!user
+  const location = useLocation()
+
+  useEffect(() => {
+    const base = import.meta.env.BASE_URL || '/'
+    if (base !== '/') {
+      const normalizedBase = base.endsWith('/') ? base : `${base}/`
+      const withoutSlash = normalizedBase.slice(0, -1)
+      if (window.location.pathname === withoutSlash) {
+        const { search, hash } = window.location
+        window.history.replaceState(
+          null,
+          '',
+          `${normalizedBase}${search}${hash}`
+        )
+      }
+    }
+  }, [location])
 
   console.log('LandingPage - user:', user, 'isLoggedIn:', isLoggedIn)
   return (

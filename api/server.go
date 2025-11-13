@@ -113,6 +113,7 @@ func (s *Server) setupRoutes() {
 		api.POST("/login", s.handleLogin)
 		api.POST("/verify-otp", s.handleVerifyOTP)
 		api.POST("/complete-registration", s.handleCompleteRegistration)
+		api.POST("/reset-password", s.handleResetPassword)
 
 		// 需要认证的路由
 		protected := api.Group("/", s.authMiddleware())
@@ -644,18 +645,18 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 
 // UpdateTraderRequest 更新交易员请求
 type UpdateTraderRequest struct {
-	Name                string  `json:"name" binding:"required"`
-	AIModelID           string  `json:"ai_model_id" binding:"required"`
-	ExchangeID          string  `json:"exchange_id" binding:"required"`
-	InitialBalance      float64 `json:"initial_balance"`
-	ScanIntervalMinutes int     `json:"scan_interval_minutes"`
-	BTCETHLeverage      int     `json:"btc_eth_leverage"`
-	AltcoinLeverage     int     `json:"altcoin_leverage"`
-	TradingSymbols      string  `json:"trading_symbols"`
-	CustomPrompt        string  `json:"custom_prompt"`
-	OverrideBasePrompt  bool    `json:"override_base_prompt"`
-	SystemPromptTemplate string `json:"system_prompt_template"` // 系统提示词模板名称
-	IsCrossMargin       *bool   `json:"is_cross_margin"`
+	Name                 string  `json:"name" binding:"required"`
+	AIModelID            string  `json:"ai_model_id" binding:"required"`
+	ExchangeID           string  `json:"exchange_id" binding:"required"`
+	InitialBalance       float64 `json:"initial_balance"`
+	ScanIntervalMinutes  int     `json:"scan_interval_minutes"`
+	BTCETHLeverage       int     `json:"btc_eth_leverage"`
+	AltcoinLeverage      int     `json:"altcoin_leverage"`
+	TradingSymbols       string  `json:"trading_symbols"`
+	CustomPrompt         string  `json:"custom_prompt"`
+	OverrideBasePrompt   bool    `json:"override_base_prompt"`
+	SystemPromptTemplate string  `json:"system_prompt_template"` // 系统提示词模板名称
+	IsCrossMargin        *bool   `json:"is_cross_margin"`
 }
 
 // handleUpdateTrader 更新交易员配置
@@ -1399,6 +1400,7 @@ func (s *Server) handlePositions(c *gin.Context) {
 
 	positions, err := trader.GetPositions()
 	if err != nil {
+		log.Printf("❌ 获取持仓列表失败 [%s]: %v", trader.GetName(), err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("获取持仓列表失败: %v", err),
 		})
@@ -1425,6 +1427,7 @@ func (s *Server) handleDecisions(c *gin.Context) {
 	// 获取所有历史决策记录（无限制）
 	records, err := trader.GetDecisionLogger().GetLatestRecords(10000)
 	if err != nil {
+		log.Printf("❌ 获取决策日志失败 [%s]: %v", trader.GetName(), err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("获取决策日志失败: %v", err),
 		})
@@ -1458,8 +1461,9 @@ func (s *Server) handleLatestDecisions(c *gin.Context) {
 
 	records, err := trader.GetDecisionLogger().GetLatestRecords(limit)
 	if err != nil {
+		log.Printf("❌ 获取最新决策日志失败 [%s]: %v", trader.GetName(), err)
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": fmt.Sprintf("获取决策日志失败: %v", err),
+			"error": fmt.Sprintf("获取最新决策日志失败: %v", err),
 		})
 		return
 	}
@@ -1489,6 +1493,7 @@ func (s *Server) handleStatistics(c *gin.Context) {
 
 	stats, err := trader.GetDecisionLogger().GetStatistics()
 	if err != nil {
+		log.Printf("❌ 获取统计信息失败 [%s]: %v", trader.GetName(), err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("获取统计信息失败: %v", err),
 		})
@@ -1537,6 +1542,7 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 	// 每3分钟一个周期：10000条 = 约20天的数据
 	records, err := trader.GetDecisionLogger().GetLatestRecords(10000)
 	if err != nil {
+		log.Printf("❌ 获取历史数据失败 [%s]: %v", trader.GetName(), err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("获取历史数据失败: %v", err),
 		})
@@ -1624,6 +1630,7 @@ func (s *Server) handlePerformance(c *gin.Context) {
 	// 即使开仓记录在窗口外，也会从更早的历史记录中查找匹配
 	performance, err := trader.GetDecisionLogger().AnalyzePerformance(1000)
 	if err != nil {
+		log.Printf("❌ 分析历史表现失败 [%s]: %v", trader.GetName(), err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("分析历史表现失败: %v", err),
 		})

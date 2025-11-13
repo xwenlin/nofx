@@ -8,6 +8,7 @@ import { useLanguage } from '../contexts/LanguageContext'
 import { t } from '../i18n/translations'
 import { copyWithToast } from '../lib/clipboard'
 import { getSystemConfig } from '../lib/config'
+import { getIconPath } from './ModelIcons'
 import { Input } from './ui/input'
 
 export function RegisterPage() {
@@ -112,7 +113,7 @@ export function RegisterPage() {
         <div className="text-center mb-8">
           <div className="w-16 h-16 mx-auto mb-4 flex items-center justify-center">
             <img
-              src="/icons/nofx.svg"
+              src={getIconPath('nofx.svg')}
               alt="NoFx Logo"
               className="w-16 h-16 object-contain"
             />

@@ -1,18 +1,34 @@
-import React, { useState, useEffect } from 'react'
+import {
+  AlertTriangle,
+  BarChart3,
+  BookOpen,
+  Bot,
+  Brain,
+  HelpCircle,
+  Landmark,
+  Pencil,
+  Plus,
+  Radio,
+  Trash2,
+  Users,
+} from 'lucide-react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { toast } from 'sonner'
 import useSWR from 'swr'
-import { api } from '../lib/api'
-import type {
-  TraderInfo,
-  CreateTraderRequest,
-  AIModel,
-  Exchange,
-} from '../types'
+import { useAuth } from '../contexts/AuthContext'
 import { useLanguage } from '../contexts/LanguageContext'
 import { t, type Language } from '../i18n/translations'
-import { useAuth } from '../contexts/AuthContext'
+import { api } from '../lib/api'
+import { confirmToast } from '../lib/notify'
+import type {
+  AIModel,
+  CreateTraderRequest,
+  Exchange,
+  TraderInfo,
+} from '../types'
 import { getExchangeIcon } from './ExchangeIcons'
-import { getModelIcon } from './ModelIcons'
+import { getImagePath, getModelIcon } from './ModelIcons'
 import { TraderConfigModal } from './TraderConfigModal'
 import {
   TwoStageKeyModal,
@@ -22,22 +38,6 @@ import {
   WebCryptoEnvironmentCheck,
   type WebCryptoCheckStatus,
 } from './WebCryptoEnvironmentCheck'
-import {
-  Bot,
-  Brain,
-  Landmark,
-  BarChart3,
-  Trash2,
-  Plus,
-  Users,
-  AlertTriangle,
-  BookOpen,
-  HelpCircle,
-  Radio,
-  Pencil,
-} from 'lucide-react'
-import { confirmToast } from '../lib/notify'
-import { toast } from 'sonner'
 
 // 获取友好的AI模型名称
 function getModelDisplayName(modelId: string): string {
@@ -79,6 +79,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
   const [allExchanges, setAllExchanges] = useState<Exchange[]>([])
   const [supportedModels, setSupportedModels] = useState<AIModel[]>([])
   const [supportedExchanges, setSupportedExchanges] = useState<Exchange[]>([])
+  const [updateKey, setUpdateKey] = useState(0) // 用于强制重新渲染
   const [userSignalSource, setUserSignalSource] = useState<{
     coinPoolUrl: string
     oiTopUrl: string
@@ -123,8 +124,9 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
           api.getSupportedModels(),
           api.getSupportedExchanges(),
         ])
-        setAllModels(modelConfigs)
-        setAllExchanges(exchangeConfigs)
+        // 创建新的数组和对象引用，确保 React 检测到变化
+        setAllModels(modelConfigs.map(m => ({ ...m })))
+        setAllExchanges(exchangeConfigs.map(e => ({ ...e })))
         setSupportedModels(supportedModels)
         setSupportedExchanges(supportedExchanges)
 
@@ -147,25 +149,12 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
 
   // 只显示已配置的模型和交易所
   // 注意：后端返回的数据不包含敏感信息（apiKey等），所以通过其他字段判断是否已配置
-  const configuredModels =
-    allModels?.filter((m) => {
-      // 如果模型已启用，说明已配置
-      // 或者有自定义API URL，也说明已配置
-      return m.enabled || (m.customApiUrl && m.customApiUrl.trim() !== '')
-    }) || []
-  const configuredExchanges =
-    allExchanges?.filter((e) => {
-      // Aster 交易所检查特殊字段
-      if (e.id === 'aster') {
-        return e.asterUser && e.asterUser.trim() !== ''
-      }
-      // Hyperliquid 需要检查钱包地址（后端会返回这个字段）
-      if (e.id === 'hyperliquid') {
-        return e.hyperliquidWalletAddr && e.hyperliquidWalletAddr.trim() !== ''
-      }
-      // 其他交易所：如果已启用，说明已配置（后端返回的已配置交易所会有 enabled: true）
-      return e.enabled
-    }) || []
+  // 后端 GetAIModels 只返回该用户已配置的模型，所以 allModels 中的模型都是已配置的
+  // 使用 useMemo 确保依赖 allModels 变化时重新计算
+  const configuredModels = useMemo(() => allModels || [], [allModels])
+  // 后端 GetExchanges 只返回该用户已配置的交易所，所以 allExchanges 中的交易所都是已配置的
+  // 使用 useMemo 确保依赖 allExchanges 变化时重新计算
+  const configuredExchanges = useMemo(() => allExchanges || [], [allExchanges])
 
   // 只在创建交易员时使用已启用且配置完整的
   // 注意：后端返回的数据不包含敏感信息，所以只检查 enabled 状态和必要的非敏感字段
@@ -223,27 +212,6 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
     return traders?.filter((t) => t.exchange_id === exchangeId) || []
   }
 
-  // 检查交易所是否配置完整且启用
-  const isExchangeFullyConfigured = (exchange: Exchange) => {
-    if (!exchange.enabled) return false;
-
-    // Aster 交易所需要特殊字段
-    if (exchange.id === 'aster') {
-      return exchange.asterUser && exchange.asterUser.trim() !== '' &&
-        exchange.asterSigner && exchange.asterSigner.trim() !== '' &&
-        exchange.asterPrivateKey && exchange.asterPrivateKey.trim() !== '';
-    }
-
-    // Hyperliquid 只需要私钥（作为apiKey）和钱包地址
-    if (exchange.id === 'hyperliquid') {
-      return exchange.apiKey && exchange.apiKey.trim() !== '' &&
-        exchange.hyperliquidWalletAddr && exchange.hyperliquidWalletAddr.trim() !== '';
-    }
-
-    // Binance 等其他交易所需要 apiKey 和 secretKey
-    return exchange.apiKey && exchange.apiKey.trim() !== '' && exchange.secretKey && exchange.secretKey.trim() !== '';
-  };
-
   const handleCreateTrader = async (data: CreateTraderRequest) => {
     try {
       const model = allModels?.find((m) => m.id === data.ai_model_id)
@@ -259,11 +227,8 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
         return
       }
 
-      await toast.promise(api.createTrader(data), {
-        loading: '正在创建…',
-        success: '创建成功',
-        error: '创建失败',
-      })
+      await api.createTrader(data)
+      toast.success('创建成功')
       setShowCreateModal(false)
       mutateTraders()
     } catch (error) {
@@ -332,11 +297,8 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
         use_oi_top: data.use_oi_top
       };
 
-      await toast.promise(api.updateTrader(editingTrader.trader_id, request), {
-        loading: '正在保存…',
-        success: '保存成功',
-        error: '保存失败',
-      })
+      await api.updateTrader(editingTrader.trader_id, request)
+      toast.success('保存成功')
       setShowEditModal(false)
       setEditingTrader(null)
       mutateTraders()
@@ -353,11 +315,8 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
     }
 
     try {
-      await toast.promise(api.deleteTrader(traderId), {
-        loading: '正在删除…',
-        success: '删除成功',
-        error: '删除失败',
-      })
+      await api.deleteTrader(traderId)
+      toast.success('删除成功')
       mutateTraders()
     } catch (error) {
       console.error('Failed to delete trader:', error)
@@ -368,17 +327,11 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
   const handleToggleTrader = async (traderId: string, running: boolean) => {
     try {
       if (running) {
-        await toast.promise(api.stopTrader(traderId), {
-          loading: '正在停止…',
-          success: '已停止',
-          error: '停止失败',
-        })
+        await api.stopTrader(traderId)
+        toast.success('已停止')
       } else {
-        await toast.promise(api.startTrader(traderId), {
-          loading: '正在启动…',
-          success: '已启动',
-          error: '启动失败',
-        })
+        await api.startTrader(traderId)
+        toast.success('已启动')
       }
       mutateTraders()
     } catch (error) {
@@ -440,11 +393,9 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
         ) || []
 
       const request = config.buildRequest(updatedItems)
-      await toast.promise(config.updateApi(request), {
-        loading: '正在更新配置…',
-        success: '配置已更新',
-        error: '更新配置失败',
-      })
+      // 先执行更新操作，确保完成后再获取
+      await config.updateApi(request)
+      toast.success('配置已更新')
 
       // 重新获取用户配置以确保数据同步
       const refreshedItems = await config.refreshApi()
@@ -489,8 +440,10 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
       updateApi: api.updateModelConfigs,
       refreshApi: api.getModelConfigs,
       setItems: (items) => {
-        // 使用函数式更新确保状态正确更新
-        setAllModels([...items])
+        // 创建新的数组和对象引用，确保 React 检测到变化
+        setAllModels(items.map(m => ({ ...m })))
+        // 强制触发重新渲染
+        setUpdateKey(prev => prev + 1)
       },
       closeModal: () => {
         setShowModelModal(false)
@@ -537,55 +490,46 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
         );
       }
 
-      let updatedModels;
-
-      if (existingModel) {
-        // 更新现有配置
-        updatedModels = allModels?.map(m =>
-          m.id === modelId 
-            ? {
-                ...m, 
-                apiKey, 
-                customApiUrl: customApiUrl || '', 
-                customModelName: customModelName || '', 
-                enabled: true 
-            } : m
-        ) || [];
-      } else {
-        // 添加新配置
-        const newModel = { 
-          ...modelToUpdate, 
-          apiKey, 
-          customApiUrl: customApiUrl || '', 
-          customModelName: customModelName || '', 
-          enabled: true 
-        };
-        updatedModels = [...(allModels || []), newModel];
-      }
+      // 只构建当前要更新的模型请求，避免清除其他模型的 api_key
+      const modelToSave = existingModel
+        ? {
+          ...existingModel,
+          apiKey,
+          customApiUrl: customApiUrl || '',
+          customModelName: customModelName || '',
+          enabled: true
+        }
+        : {
+          ...modelToUpdate,
+          apiKey,
+          customApiUrl: customApiUrl || '',
+          customModelName: customModelName || '',
+          enabled: true
+        }
 
       const request = {
-        models: Object.fromEntries(
-          updatedModels.map((model) => [
-            model.provider, // 使用 provider 而不是 id
-            {
-              enabled: model.enabled,
-              api_key: model.apiKey || '',
-              custom_api_url: model.customApiUrl || '',
-              custom_model_name: model.customModelName || '',
-            },
-          ])
-        ),
+        models: {
+          [modelToSave.provider]: {
+            enabled: modelToSave.enabled,
+            api_key: modelToSave.apiKey || '',
+            custom_api_url: modelToSave.customApiUrl || '',
+            custom_model_name: modelToSave.customModelName || '',
+          },
+        },
       }
 
-      await toast.promise(api.updateModelConfigs(request), {
-        loading: '正在更新模型配置…',
-        success: '模型配置已更新',
-        error: '更新模型配置失败',
-      })
+      // 先执行更新操作，确保完成后再获取
+      await api.updateModelConfigs(request)
+      toast.success('模型配置已更新')
 
       // 重新获取用户配置以确保数据同步
       const refreshedModels = await api.getModelConfigs()
-      setAllModels(refreshedModels)
+
+      // 创建新的数组和对象引用，确保 React 检测到变化
+      setAllModels(refreshedModels.map(m => ({ ...m })))
+
+      // 强制触发重新渲染
+      setUpdateKey(prev => prev + 1)
 
       setShowModelModal(false)
       setEditingModel(null)
@@ -634,8 +578,10 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
       updateApi: api.updateExchangeConfigsEncrypted,
       refreshApi: api.getExchangeConfigs,
       setItems: (items) => {
-        // 使用函数式更新确保状态正确更新
-        setAllExchanges([...items])
+        // 创建新的数组和对象引用，确保 React 检测到变化
+        setAllExchanges(items.map(e => ({ ...e })))
+        // 强制触发重新渲染
+        setUpdateKey(prev => prev + 1)
       },
       closeModal: () => {
         setShowExchangeModal(false)
@@ -675,16 +621,16 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
           allExchanges?.map((e) =>
             e.id === exchangeId
               ? {
-                  ...e,
-                  apiKey,
-                  secretKey,
-                  testnet,
-                  hyperliquidWalletAddr,
-                  asterUser,
-                  asterSigner,
-                  asterPrivateKey,
-                  enabled: true,
-                }
+                ...e,
+                apiKey,
+                secretKey,
+                testnet,
+                hyperliquidWalletAddr,
+                asterUser,
+                asterSigner,
+                asterPrivateKey,
+                enabled: true,
+              }
               : e
           ) || []
       } else {
@@ -721,15 +667,16 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
         ),
       }
 
-      await toast.promise(api.updateExchangeConfigsEncrypted(request), {
-        loading: '正在更新交易所配置…',
-        success: '交易所配置已更新',
-        error: '更新交易所配置失败',
-      })
+      // 先执行更新操作，确保完成后再获取
+      await api.updateExchangeConfigsEncrypted(request)
+      toast.success('交易所配置已更新')
 
       // 重新获取用户配置以确保数据同步
       const refreshedExchanges = await api.getExchangeConfigs()
-      setAllExchanges(refreshedExchanges)
+      // 创建新的数组和对象引用，确保 React 检测到变化
+      setAllExchanges(refreshedExchanges.map(e => ({ ...e })))
+      // 强制触发重新渲染
+      setUpdateKey(prev => prev + 1)
 
       setShowExchangeModal(false)
       setEditingExchange(null)
@@ -754,11 +701,8 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
     oiTopUrl: string
   ) => {
     try {
-      await toast.promise(api.saveUserSignalSource(coinPoolUrl, oiTopUrl), {
-        loading: '正在保存…',
-        success: '保存成功',
-        error: '保存失败',
-      })
+      await api.saveUserSignalSource(coinPoolUrl, oiTopUrl)
+      toast.success('保存成功')
       setUserSignalSource({ coinPoolUrl, oiTopUrl })
       setShowSignalSourceModal(false)
     } catch (error) {
@@ -933,12 +877,11 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
               const inUse = isModelInUse(model.id)
               return (
                 <div
-                  key={model.id}
-                  className={`flex items-center justify-between p-2 md:p-3 rounded transition-all ${
-                    inUse
-                      ? 'cursor-not-allowed'
-                      : 'cursor-pointer hover:bg-gray-700'
-                  }`}
+                  key={`${model.id}-${updateKey}-${model.enabled}`}
+                  className={`flex items-center justify-between p-2 md:p-3 rounded transition-all ${inUse
+                    ? 'cursor-not-allowed'
+                    : 'cursor-pointer hover:bg-gray-700'
+                    }`}
                   style={{ background: '#0B0E11', border: '1px solid #2B3139' }}
                   onClick={() => handleModelClick(model.id)}
                 >
@@ -948,17 +891,17 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
                         width: 28,
                         height: 28,
                       }) || (
-                        <div
-                          className="w-7 h-7 md:w-8 md:h-8 rounded-full flex items-center justify-center text-xs md:text-sm font-bold"
-                          style={{
-                            background:
-                              model.id === 'deepseek' ? '#60a5fa' : '#c084fc',
-                            color: '#fff',
-                          }}
-                        >
-                          {getShortName(model.name)[0]}
-                        </div>
-                      )}
+                          <div
+                            className="w-7 h-7 md:w-8 md:h-8 rounded-full flex items-center justify-center text-xs md:text-sm font-bold"
+                            style={{
+                              background:
+                                model.id === 'deepseek' ? '#60a5fa' : '#c084fc',
+                              color: '#fff',
+                            }}
+                          >
+                            {getShortName(model.name)[0]}
+                          </div>
+                        )}
                     </div>
                     <div className="min-w-0">
                       <div
@@ -1013,12 +956,11 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
               const inUse = isExchangeInUse(exchange.id)
               return (
                 <div
-                  key={exchange.id}
-                  className={`flex items-center justify-between p-2 md:p-3 rounded transition-all ${
-                    inUse
-                      ? 'cursor-not-allowed'
-                      : 'cursor-pointer hover:bg-gray-700'
-                  }`}
+                  key={`${exchange.id}-${updateKey}-${exchange.enabled}`}
+                  className={`flex items-center justify-between p-2 md:p-3 rounded transition-all ${inUse
+                    ? 'cursor-not-allowed'
+                    : 'cursor-pointer hover:bg-gray-700'
+                    }`}
                   style={{ background: '#0B0E11', border: '1px solid #2B3139' }}
                   onClick={() => handleExchangeClick(exchange.id)}
                 >
@@ -1129,21 +1071,20 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
                       {t('status', language)}
                     </div> */}
                     <div
-                      className={`px-2 md:px-3 py-1 rounded text-xs font-bold ${
-                        trader.is_running
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-red-100 text-red-800'
-                      }`}
+                      className={`px-2 md:px-3 py-1 rounded text-xs font-bold ${trader.is_running
+                        ? 'bg-green-100 text-green-800'
+                        : 'bg-red-100 text-red-800'
+                        }`}
                       style={
                         trader.is_running
                           ? {
-                              background: 'rgba(14, 203, 129, 0.1)',
-                              color: '#0ECB81',
-                            }
+                            background: 'rgba(14, 203, 129, 0.1)',
+                            color: '#0ECB81',
+                          }
                           : {
-                              background: 'rgba(246, 70, 93, 0.1)',
-                              color: '#F6465D',
-                            }
+                            background: 'rgba(246, 70, 93, 0.1)',
+                            color: '#F6465D',
+                          }
                       }
                     >
                       {trader.is_running
@@ -1198,13 +1139,13 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
                       style={
                         trader.is_running
                           ? {
-                              background: 'rgba(246, 70, 93, 0.1)',
-                              color: '#F6465D',
-                            }
+                            background: 'rgba(246, 70, 93, 0.1)',
+                            color: '#F6465D',
+                          }
                           : {
-                              background: 'rgba(14, 203, 129, 0.1)',
-                              color: '#0ECB81',
-                            }
+                            background: 'rgba(14, 203, 129, 0.1)',
+                            color: '#0ECB81',
+                          }
                       }
                     >
                       {trader.is_running
@@ -1241,15 +1182,15 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
             </div>
             {(configuredModels.length === 0 ||
               configuredExchanges.length === 0) && (
-              <div className="text-xs md:text-sm text-yellow-500">
-                {configuredModels.length === 0 &&
-                configuredExchanges.length === 0
-                  ? t('configureModelsAndExchangesFirst', language)
-                  : configuredModels.length === 0
-                    ? t('configureModelsFirst', language)
-                    : t('configureExchangesFirst', language)}
-              </div>
-            )}
+                <div className="text-xs md:text-sm text-yellow-500">
+                  {configuredModels.length === 0 &&
+                    configuredExchanges.length === 0
+                    ? t('configureModelsAndExchangesFirst', language)
+                    : configuredModels.length === 0
+                      ? t('configureModelsFirst', language)
+                      : t('configureExchangesFirst', language)}
+                </div>
+              )}
           </div>
         )}
       </div>
@@ -1641,19 +1582,19 @@ function ModelConfigModal({
                       width: 32,
                       height: 32,
                     }) || (
-                      <div
-                        className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold"
-                        style={{
-                          background:
-                            selectedModel.id === 'deepseek'
-                              ? '#60a5fa'
-                              : '#c084fc',
-                          color: '#fff',
-                        }}
-                      >
-                        {selectedModel.name[0]}
-                      </div>
-                    )}
+                        <div
+                          className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold"
+                          style={{
+                            background:
+                              selectedModel.id === 'deepseek'
+                                ? '#60a5fa'
+                                : '#c084fc',
+                            color: '#fff',
+                          }}
+                        >
+                          {selectedModel.name[0]}
+                        </div>
+                      )}
                   </div>
                   <div>
                     <div className="font-semibold" style={{ color: '#EAECEF' }}>
@@ -2678,7 +2619,7 @@ function ExchangeConfigModal({
             </div>
             <div className="overflow-y-auto max-h-[80vh]">
               <img
-                src="/images/guide.png"
+                src={getImagePath('guide.png')}
                 alt={t('binanceSetupGuide', language)}
                 className="w-full h-auto rounded"
               />

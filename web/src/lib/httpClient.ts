@@ -10,6 +10,31 @@
 
 import { toast } from 'sonner'
 
+const BASE_URL = import.meta.env.BASE_URL || '/'
+
+function buildFullPath(path: string): string {
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`
+  const normalizedBase = BASE_URL.endsWith('/')
+    ? BASE_URL.slice(0, -1)
+    : BASE_URL
+  if (normalizedBase === '') {
+    return normalizedPath
+  }
+  if (normalizedBase === '/') {
+    return normalizedPath
+  }
+  return `${normalizedBase}${normalizedPath}`
+}
+
+const LOGIN_PATH = buildFullPath('/login')
+const ROOT_PATH = buildFullPath('/')
+
+function isLoginPath(pathname: string): boolean {
+  const path = pathname.split('?')[0].replace(/\/$/, '')
+  const login = LOGIN_PATH.replace(/\/$/, '')
+  return path === login
+}
+
 export class HttpClient {
   // Singleton flag to prevent duplicate 401 handling
   private static isHandling401 = false
@@ -58,15 +83,24 @@ export class HttpClient {
 
       // Delay redirect to let user see the notification
       setTimeout(() => {
-        // Only redirect if not already on login page
-        if (!window.location.pathname.includes('/login')) {
-          // Save current location for post-login redirect
-          const returnUrl = window.location.pathname + window.location.search
-          if (returnUrl !== '/login' && returnUrl !== '/') {
+        const currentPath = window.location.pathname
+        if (!isLoginPath(currentPath)) {
+          const returnUrl = currentPath + window.location.search
+          const normalizedReturnPath = returnUrl.split('?')[0]
+          const sanitizedReturnPath =
+            normalizedReturnPath === '/'
+              ? '/'
+              : normalizedReturnPath.replace(/\/$/, '')
+          const sanitizedRoot =
+            ROOT_PATH === '/' ? '/' : ROOT_PATH.replace(/\/$/, '')
+          if (
+            !isLoginPath(normalizedReturnPath) &&
+            sanitizedReturnPath !== sanitizedRoot
+          ) {
             sessionStorage.setItem('returnUrl', returnUrl)
           }
 
-          window.location.href = '/login'
+          window.location.href = LOGIN_PATH
         }
         // Note: No need to reset flag since we're redirecting
       }, 1500) // 1.5秒延迟,让用户看到提示

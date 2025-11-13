@@ -14,5 +14,12 @@ export default defineConfig({
         rewrite: (path) => path.replace(/^\/nofx-api/, '/api'),
       },
     },
+    watch: {            // 这个配置对 Docker / WSL / 远程开发环境 特别重要。
+      usePolling: true, // 开启轮询
+      interval: 100,    // 检查间隔（毫秒）
+    },
+    hmr: {
+      overlay: true,  // 出错时弹窗提示
+    },
   },
 })

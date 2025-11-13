@@ -1,12 +1,11 @@
 import { RouterProvider } from 'react-router-dom'
-import { LanguageProvider } from './contexts/LanguageContext'
-import { AuthProvider } from './contexts/AuthContext'
 import { ConfirmDialogProvider } from './components/ConfirmDialog'
-import { router } from './routes'
+import { getIconPath } from './components/ModelIcons'
+import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { LanguageProvider, useLanguage } from './contexts/LanguageContext'
 import { useSystemConfig } from './hooks/useSystemConfig'
-import { useAuth } from './contexts/AuthContext'
-import { useLanguage } from './contexts/LanguageContext'
 import { t } from './i18n/translations'
+import { router } from './routes'
 
 function LoadingScreen() {
   const { language } = useLanguage()
@@ -18,7 +17,7 @@ function LoadingScreen() {
     >
       <div className="text-center">
         <img
-          src="/icons/nofx.svg"
+          src={getIconPath('nofx.svg')}
           alt="NoFx Logo"
           className="w-16 h-16 mx-auto mb-4 animate-pulse"
         />

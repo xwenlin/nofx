@@ -10,6 +10,7 @@ import (
 	"nofx/crypto"
 	"nofx/market"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -60,9 +61,22 @@ type Database struct {
 
 // NewDatabase 创建配置数据库
 func NewDatabase(dbPath string) (*Database, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	// 将相对路径转换为绝对路径，避免工作目录问题
+	absPath, err := filepath.Abs(dbPath)
 	if err != nil {
-		return nil, fmt.Errorf("打开数据库失败: %w", err)
+		return nil, fmt.Errorf("获取数据库绝对路径失败: %w", err)
+	}
+
+	// 确保数据库文件所在目录存在
+	dir := filepath.Dir(absPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("创建数据库目录失败 (%s): %w", dir, err)
+	}
+
+	log.Printf("📂 数据库路径: %s", absPath)
+	db, err := sql.Open("sqlite", absPath)
+	if err != nil {
+		return nil, fmt.Errorf("打开数据库失败 (%s): %w", absPath, err)
 	}
 
 	// 🔒 启用 WAL 模式,提高并发性能和崩溃恢复能力
@@ -656,11 +670,33 @@ func (d *Database) UpdateAIModel(userID, id string, enabled bool, apiKey, custom
 
 	if err == nil {
 		// 找到了现有配置（精确匹配 ID），更新它
-		encryptedAPIKey := d.encryptSensitiveData(apiKey)
-		_, err = d.db.Exec(`
-			UPDATE ai_models SET enabled = ?, api_key = ?, custom_api_url = ?, custom_model_name = ?, updated_at = datetime('now')
+		// 🔒 安全特性：空值不会覆盖现有的敏感字段（api_key）
+		// 构建动态 UPDATE SET 子句
+		setClauses := []string{
+			"enabled = ?",
+			"custom_api_url = ?",
+			"custom_model_name = ?",
+			"updated_at = datetime('now')",
+		}
+		args := []interface{}{enabled, customAPIURL, customModelName}
+
+		// 🔒 敏感字段：只在非空时更新（保护现有数据）
+		if apiKey != "" {
+			encryptedAPIKey := d.encryptSensitiveData(apiKey)
+			setClauses = append(setClauses, "api_key = ?")
+			args = append(args, encryptedAPIKey)
+		}
+
+		// WHERE 条件
+		args = append(args, existingID, userID)
+
+		// 构建完整的 UPDATE 语句
+		query := fmt.Sprintf(`
+			UPDATE ai_models SET %s
 			WHERE id = ? AND user_id = ?
-		`, enabled, encryptedAPIKey, customAPIURL, customModelName, existingID, userID)
+		`, strings.Join(setClauses, ", "))
+
+		_, err = d.db.Exec(query, args...)
 		return err
 	}
 
@@ -673,11 +709,33 @@ func (d *Database) UpdateAIModel(userID, id string, enabled bool, apiKey, custom
 	if err == nil {
 		// 找到了现有配置（通过 provider 匹配，兼容旧版），更新它
 		log.Printf("⚠️  使用旧版 provider 匹配更新模型: %s -> %s", provider, existingID)
-		encryptedAPIKey := d.encryptSensitiveData(apiKey)
-		_, err = d.db.Exec(`
-			UPDATE ai_models SET enabled = ?, api_key = ?, custom_api_url = ?, custom_model_name = ?, updated_at = datetime('now')
+		// 🔒 安全特性：空值不会覆盖现有的敏感字段（api_key）
+		// 构建动态 UPDATE SET 子句
+		setClauses := []string{
+			"enabled = ?",
+			"custom_api_url = ?",
+			"custom_model_name = ?",
+			"updated_at = datetime('now')",
+		}
+		args := []interface{}{enabled, customAPIURL, customModelName}
+
+		// 🔒 敏感字段：只在非空时更新（保护现有数据）
+		if apiKey != "" {
+			encryptedAPIKey := d.encryptSensitiveData(apiKey)
+			setClauses = append(setClauses, "api_key = ?")
+			args = append(args, encryptedAPIKey)
+		}
+
+		// WHERE 条件
+		args = append(args, existingID, userID)
+
+		// 构建完整的 UPDATE 语句
+		query := fmt.Sprintf(`
+			UPDATE ai_models SET %s
 			WHERE id = ? AND user_id = ?
-		`, enabled, encryptedAPIKey, customAPIURL, customModelName, existingID, userID)
+		`, strings.Join(setClauses, ", "))
+
+		_, err = d.db.Exec(query, args...)
 		return err
 	}
 
@@ -696,11 +754,11 @@ func (d *Database) UpdateAIModel(userID, id string, enabled bool, apiKey, custom
 		}
 	}
 
-	// 获取模型的基本信息
+	// 获取模型的基本信息，默认是"default"用户
 	var name string
 	err = d.db.QueryRow(`
-		SELECT name FROM ai_models WHERE provider = ? LIMIT 1
-	`, provider).Scan(&name)
+		SELECT name FROM ai_models WHERE user_id= ? and provider = ? LIMIT 1
+	`, "default", provider).Scan(&name)
 	if err != nil {
 		// 如果找不到基本信息，使用默认值
 		if provider == "deepseek" {
@@ -777,6 +835,18 @@ func (d *Database) GetExchanges(userID string) ([]*ExchangeConfig, error) {
 func (d *Database) UpdateExchange(userID, id string, enabled bool, apiKey, secretKey string, testnet bool, hyperliquidWalletAddr, asterUser, asterSigner, asterPrivateKey string) error {
 	log.Printf("🔧 UpdateExchange: userID=%s, id=%s, enabled=%v", userID, id, enabled)
 
+	// 🔒 预先加密敏感字段（如果非空），避免重复加密
+	var encryptedAPIKey, encryptedSecretKey, encryptedAsterPrivateKey string
+	if apiKey != "" {
+		encryptedAPIKey = d.encryptSensitiveData(apiKey)
+	}
+	if secretKey != "" {
+		encryptedSecretKey = d.encryptSensitiveData(secretKey)
+	}
+	if asterPrivateKey != "" {
+		encryptedAsterPrivateKey = d.encryptSensitiveData(asterPrivateKey)
+	}
+
 	// 构建动态 UPDATE SET 子句
 	// 基础字段：总是更新
 	setClauses := []string{
@@ -791,19 +861,16 @@ func (d *Database) UpdateExchange(userID, id string, enabled bool, apiKey, secre
 
 	// 🔒 敏感字段：只在非空时更新（保护现有数据）
 	if apiKey != "" {
-		encryptedAPIKey := d.encryptSensitiveData(apiKey)
 		setClauses = append(setClauses, "api_key = ?")
 		args = append(args, encryptedAPIKey)
 	}
 
 	if secretKey != "" {
-		encryptedSecretKey := d.encryptSensitiveData(secretKey)
 		setClauses = append(setClauses, "secret_key = ?")
 		args = append(args, encryptedSecretKey)
 	}
 
 	if asterPrivateKey != "" {
-		encryptedAsterPrivateKey := d.encryptSensitiveData(asterPrivateKey)
 		setClauses = append(setClauses, "aster_private_key = ?")
 		args = append(args, encryptedAsterPrivateKey)
 	}
@@ -855,12 +922,12 @@ func (d *Database) UpdateExchange(userID, id string, enabled bool, apiKey, secre
 
 		log.Printf("🆕 UpdateExchange: 创建新记录 ID=%s, name=%s, type=%s", id, name, typ)
 
-		// 创建用户特定的配置，使用原始的交易所ID
+		// 创建用户特定的配置，使用原始的交易所ID（使用预先加密的敏感字段）
 		_, err = d.db.Exec(`
 			INSERT INTO exchanges (id, user_id, name, type, enabled, api_key, secret_key, testnet,
 			                       hyperliquid_wallet_addr, aster_user, aster_signer, aster_private_key, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-		`, id, userID, name, typ, enabled, apiKey, secretKey, testnet, hyperliquidWalletAddr, asterUser, asterSigner, asterPrivateKey)
+		`, id, userID, name, typ, enabled, encryptedAPIKey, encryptedSecretKey, testnet, hyperliquidWalletAddr, asterUser, asterSigner, encryptedAsterPrivateKey)
 
 		if err != nil {
 			log.Printf("❌ UpdateExchange: 创建记录失败: %v", err)
@@ -876,10 +943,12 @@ func (d *Database) UpdateExchange(userID, id string, enabled bool, apiKey, secre
 
 // CreateAIModel 创建AI模型配置
 func (d *Database) CreateAIModel(userID, id, name, provider string, enabled bool, apiKey, customAPIURL string) error {
+	// 加密敏感字段
+	encryptedAPIKey := d.encryptSensitiveData(apiKey)
 	_, err := d.db.Exec(`
 		INSERT OR IGNORE INTO ai_models (id, user_id, name, provider, enabled, api_key, custom_api_url) 
 		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, id, userID, name, provider, enabled, apiKey, customAPIURL)
+	`, id, userID, name, provider, enabled, encryptedAPIKey, customAPIURL)
 	return err
 }
 
