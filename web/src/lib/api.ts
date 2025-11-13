@@ -52,7 +52,18 @@ export const api = {
       request,
       getAuthHeaders()
     )
-    if (!res.ok) throw new Error('创建交易员失败')
+    if (!res.ok) {
+      // 尝试提取服务器返回的具体错误信息
+      try {
+        const errorData = await res.json()
+        const errorMessage = errorData?.error || '创建交易员失败'
+        throw new Error(errorMessage)
+      } catch (e) {
+        // 如果解析失败，使用默认错误消息
+        if (e instanceof Error) throw e
+        throw new Error('创建交易员失败')
+      }
+    }
     return res.json()
   },
 
@@ -70,7 +81,18 @@ export const api = {
       undefined,
       getAuthHeaders()
     )
-    if (!res.ok) throw new Error('启动交易员失败')
+    if (!res.ok) {
+      // 尝试提取服务器返回的具体错误信息
+      try {
+        const errorData = await res.json()
+        const errorMessage = errorData?.error || '启动交易员失败'
+        throw new Error(errorMessage)
+      } catch (e) {
+        // 如果解析失败，使用默认错误消息
+        if (e instanceof Error) throw e
+        throw new Error('启动交易员失败')
+      }
+    }
   },
 
   async stopTrader(traderId: string): Promise<void> {
@@ -79,7 +101,18 @@ export const api = {
       undefined,
       getAuthHeaders()
     )
-    if (!res.ok) throw new Error('停止交易员失败')
+    if (!res.ok) {
+      // 尝试提取服务器返回的具体错误信息
+      try {
+        const errorData = await res.json()
+        const errorMessage = errorData?.error || '停止交易员失败'
+        throw new Error(errorMessage)
+      } catch (e) {
+        // 如果解析失败，使用默认错误消息
+        if (e instanceof Error) throw e
+        throw new Error('停止交易员失败')
+      }
+    }
   },
 
   async updateTraderPrompt(
@@ -112,7 +145,18 @@ export const api = {
       request,
       getAuthHeaders()
     )
-    if (!res.ok) throw new Error('更新交易员失败')
+    if (!res.ok) {
+      // 尝试提取服务器返回的具体错误信息
+      try {
+        const errorData = await res.json()
+        const errorMessage = errorData?.error || '更新交易员失败'
+        throw new Error(errorMessage)
+      } catch (e) {
+        // 如果解析失败，使用默认错误消息
+        if (e instanceof Error) throw e
+        throw new Error('更新交易员失败')
+      }
+    }
     return res.json()
   },
 
@@ -209,7 +253,18 @@ export const api = {
       encryptedPayload,
       getAuthHeaders()
     )
-    if (!res.ok) throw new Error('更新交易所配置失败')
+    if (!res.ok) {
+      // 尝试提取服务器返回的具体错误信息
+      try {
+        const errorData = await res.json()
+        const errorMessage = errorData?.error || '更新交易所配置失败'
+        throw new Error(errorMessage)
+      } catch (e) {
+        // 如果解析失败，使用默认错误消息
+        if (e instanceof Error) throw e
+        throw new Error('更新交易所配置失败')
+      }
+    }
   },
 
   // 获取系统状态（支持trader_id）

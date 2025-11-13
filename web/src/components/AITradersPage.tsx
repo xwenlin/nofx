@@ -213,28 +213,20 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
   }
 
   const handleCreateTrader = async (data: CreateTraderRequest) => {
-    try {
-      const model = allModels?.find((m) => m.id === data.ai_model_id)
-      const exchange = allExchanges?.find((e) => e.id === data.exchange_id)
+    const model = allModels?.find((m) => m.id === data.ai_model_id)
+    const exchange = allExchanges?.find((e) => e.id === data.exchange_id)
 
-      if (!model?.enabled) {
-        toast.error(t('modelNotConfigured', language))
-        return
-      }
-
-      if (!exchange?.enabled) {
-        toast.error(t('exchangeNotConfigured', language))
-        return
-      }
-
-      await api.createTrader(data)
-      toast.success('创建成功')
-      setShowCreateModal(false)
-      mutateTraders()
-    } catch (error) {
-      console.error('Failed to create trader:', error)
-      toast.error(t('createTraderFailed', language))
+    if (!model?.enabled) {
+      throw new Error(t('modelNotConfigured', language))
     }
+
+    if (!exchange?.enabled) {
+      throw new Error(t('exchangeNotConfigured', language))
+    }
+
+    await api.createTrader(data)
+    setShowCreateModal(false)
+    mutateTraders()
   }
 
   const handleEditTrader = async (traderId: string) => {
@@ -320,7 +312,9 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
       mutateTraders()
     } catch (error) {
       console.error('Failed to delete trader:', error)
-      toast.error(t('deleteTraderFailed', language))
+      // 显示具体的错误信息，如果没有则显示默认消息
+      const errorMessage = error instanceof Error ? error.message : t('operationFailed', language)
+      toast.error(errorMessage)
     }
   }
 
@@ -336,7 +330,9 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
       mutateTraders()
     } catch (error) {
       console.error('Failed to toggle trader:', error)
-      toast.error(t('operationFailed', language))
+      // 显示具体的错误信息，如果没有则显示默认消息
+      const errorMessage = error instanceof Error ? error.message : t('operationFailed', language)
+      toast.error(errorMessage)
     }
   }
 
@@ -682,7 +678,9 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
       setEditingExchange(null)
     } catch (error) {
       console.error('Failed to save exchange config:', error)
-      toast.error(t('saveConfigFailed', language))
+      // 显示具体的错误信息，如果没有则显示默认消息
+      const errorMessage = error instanceof Error ? error.message : t('saveConfigFailed', language)
+      toast.error(errorMessage)
     }
   }
 

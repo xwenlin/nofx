@@ -267,7 +267,7 @@ export function TraderConfigModal({
 
     setIsSaving(true)
     try {
-      const saveData: CreateTraderRequest = {
+      const saveData = {
         name: formData.trader_name,
         ai_model_id: formData.ai_model,
         exchange_id: formData.exchange_id,
@@ -281,17 +281,19 @@ export function TraderConfigModal({
         use_coin_pool: formData.use_coin_pool,
         use_oi_top: formData.use_oi_top,
         scan_interval_minutes: formData.scan_interval_minutes,
-      }
-
-      // 只在编辑模式时包含initial_balance（用于手动更新）
-      if (isEditMode && formData.initial_balance !== undefined) {
-        saveData.initial_balance = formData.initial_balance
-      }
+        // 只在编辑模式时包含initial_balance（用于手动更新）
+        ...(isEditMode && formData.initial_balance !== undefined
+          ? { initial_balance: formData.initial_balance }
+          : {}),
+      } as CreateTraderRequest
 
       await toast.promise(onSave(saveData), {
         loading: '正在保存…',
-        success: '保存成功',
-        error: '保存失败',
+        success: isEditMode ? '保存成功' : '创建成功',
+        error: (err) => {
+          // 显示具体的错误信息，如果没有则显示默认消息
+          return err instanceof Error ? err.message : (isEditMode ? '保存失败' : '创建失败')
+        },
       })
       onClose()
     } catch (error) {
@@ -420,8 +422,8 @@ export function TraderConfigModal({
                       type="button"
                       onClick={() => handleInputChange('is_cross_margin', true)}
                       className={`flex-1 px-3 py-2 rounded text-sm ${formData.is_cross_margin
-                          ? 'bg-[#F0B90B] text-black'
-                          : 'bg-[#0B0E11] text-[#848E9C] border border-[#2B3139]'
+                        ? 'bg-[#F0B90B] text-black'
+                        : 'bg-[#0B0E11] text-[#848E9C] border border-[#2B3139]'
                         }`}
                     >
                       全仓
@@ -432,8 +434,8 @@ export function TraderConfigModal({
                         handleInputChange('is_cross_margin', false)
                       }
                       className={`flex-1 px-3 py-2 rounded text-sm ${!formData.is_cross_margin
-                          ? 'bg-[#F0B90B] text-black'
-                          : 'bg-[#0B0E11] text-[#848E9C] border border-[#2B3139]'
+                        ? 'bg-[#F0B90B] text-black'
+                        : 'bg-[#0B0E11] text-[#848E9C] border border-[#2B3139]'
                         }`}
                     >
                       逐仓

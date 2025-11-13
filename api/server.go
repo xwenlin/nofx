@@ -22,6 +22,25 @@ import (
 	"github.com/google/uuid"
 )
 
+// validateAsterPrivateKey 验证 Aster 私钥格式
+func validateAsterPrivateKey(privateKey string) error {
+	if privateKey == "" {
+		return nil // 空值由调用方处理
+	}
+	privateKeyHex := strings.TrimPrefix(privateKey, "0x")
+	// 检查长度（64个十六进制字符 = 32字节）
+	if len(privateKeyHex) != 64 {
+		return fmt.Errorf("长度应为64个十六进制字符（当前: %d），请检查私钥格式", len(privateKeyHex))
+	}
+	// 检查是否只包含十六进制字符
+	for _, c := range privateKeyHex {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return fmt.Errorf("包含无效字符 '%c'，私钥必须是有效的十六进制字符串", c)
+		}
+	}
+	return nil
+}
+
 // Server HTTP API服务器
 type Server struct {
 	router        *gin.Engine
@@ -699,10 +718,10 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 	// 设置杠杆默认值
 	btcEthLeverage := req.BTCETHLeverage
 	altcoinLeverage := req.AltcoinLeverage
-	if btcEthLeverage <= 0 {
+	if btcEthLeverage <= 0 || btcEthLeverage > 50 {
 		btcEthLeverage = existingTrader.BTCETHLeverage // 保持原值
 	}
-	if altcoinLeverage <= 0 {
+	if altcoinLeverage <= 0 || altcoinLeverage > 20 {
 		altcoinLeverage = existingTrader.AltcoinLeverage // 保持原值
 	}
 
@@ -718,6 +737,12 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 	systemPromptTemplate := req.SystemPromptTemplate
 	if systemPromptTemplate == "" {
 		systemPromptTemplate = existingTrader.SystemPromptTemplate // 如果请求中没有提供，保持原值
+	}
+
+	// 验证初始金额必须大于0
+	if req.InitialBalance <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "初始金额必须大于0，请检查交易所余额或手动设置初始金额"})
+		return
 	}
 
 	// 更新交易员配置
@@ -745,6 +770,9 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("更新交易员失败: %v", err)})
 		return
 	}
+
+	// 🔄 从内存中移除旧的trader实例，以便重新加载最新配置
+	s.traderManager.RemoveTrader(traderID)
 
 	// 重新加载交易员到内存
 	err = s.traderManager.LoadTraderByID(s.database, userID, traderID)
@@ -1188,6 +1216,16 @@ func (s *Server) handleUpdateExchangeConfigs(c *gin.Context) {
 
 	// 更新每个交易所的配置
 	for exchangeID, exchangeData := range req.Exchanges {
+		// 如果是 Aster 交易所且提供了私钥，验证私钥格式
+		if exchangeID == "aster" && exchangeData.AsterPrivateKey != "" {
+			if err := validateAsterPrivateKey(exchangeData.AsterPrivateKey); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"error": fmt.Sprintf("Aster 私钥格式错误: %v", err),
+				})
+				return
+			}
+		}
+
 		err := s.database.UpdateExchange(userID, exchangeID, exchangeData.Enabled, exchangeData.APIKey, exchangeData.SecretKey, exchangeData.Testnet, exchangeData.HyperliquidWalletAddr, exchangeData.AsterUser, exchangeData.AsterSigner, exchangeData.AsterPrivateKey)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("更新交易所 %s 失败: %v", exchangeID, err)})
