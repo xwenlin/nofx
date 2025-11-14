@@ -41,6 +41,15 @@ func validateAsterPrivateKey(privateKey string) error {
 	return nil
 }
 
+// getMapKeys 获取 map 的所有键（用于调试）
+func getMapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 // Server HTTP API服务器
 type Server struct {
 	router        *gin.Engine
@@ -602,19 +611,42 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 			if balanceErr != nil {
 				log.Printf("⚠️ 查询交易所余额失败，使用用户输入的初始资金: %v", balanceErr)
 			} else {
-				// 提取可用余额
-				if availableBalance, ok := balanceInfo["available_balance"].(float64); ok && availableBalance > 0 {
-					actualBalance = availableBalance
-					log.Printf("✓ 查询到交易所实际余额: %.2f USDT (用户输入: %.2f USDT)", actualBalance, req.InitialBalance)
-				} else if totalBalance, ok := balanceInfo["balance"].(float64); ok && totalBalance > 0 {
-					// 有些交易所可能只返回 balance 字段
-					actualBalance = totalBalance
+				// 提取可用余额（所有交易所统一使用驼峰命名格式）
+				// 统一字段: availableBalance, totalWalletBalance, totalUnrealizedProfit
+				var extractedBalance float64
+				var found bool
+
+				// 优先使用可用余额
+				if availableBalance, ok := balanceInfo["availableBalance"].(float64); ok && availableBalance > 0 {
+					extractedBalance = availableBalance
+					found = true
+					log.Printf("✓ 从 availableBalance 字段提取余额: %.2f USDT", extractedBalance)
+				} else if totalBalance, ok := balanceInfo["totalWalletBalance"].(float64); ok && totalBalance > 0 {
+					// 如果可用余额为0，使用总余额作为备选
+					extractedBalance = totalBalance
+					found = true
+					log.Printf("✓ 从 totalWalletBalance 字段提取余额: %.2f USDT", extractedBalance)
+				}
+
+				if found {
+					actualBalance = extractedBalance
 					log.Printf("✓ 查询到交易所实际余额: %.2f USDT (用户输入: %.2f USDT)", actualBalance, req.InitialBalance)
 				} else {
-					log.Printf("⚠️ 无法从余额信息中提取可用余额，使用用户输入的初始资金")
+					// 调试：打印所有可用的字段
+					log.Printf("⚠️ 无法从余额信息中提取可用余额")
+					log.Printf("   余额信息包含的字段: %v", getMapKeys(balanceInfo))
+					log.Printf("   使用用户输入的初始资金: %.2f USDT", req.InitialBalance)
 				}
 			}
 		}
+	}
+
+	// 验证初始金额必须大于0
+	if actualBalance <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "初始金额必须大于0，请检查交易所余额或手动设置初始金额。如果已配置交易所，请确保API密钥正确且账户有余额。",
+		})
+		return
 	}
 
 	// 创建交易员配置（数据库实体）
@@ -992,13 +1024,12 @@ func (s *Server) handleSyncBalance(c *gin.Context) {
 		return
 	}
 
-	// 提取可用余额
+	// 提取可用余额（所有交易所统一使用驼峰命名格式）
 	var actualBalance float64
-	if availableBalance, ok := balanceInfo["available_balance"].(float64); ok && availableBalance > 0 {
+	if availableBalance, ok := balanceInfo["availableBalance"].(float64); ok && availableBalance > 0 {
 		actualBalance = availableBalance
-	} else if availableBalance, ok := balanceInfo["availableBalance"].(float64); ok && availableBalance > 0 {
-		actualBalance = availableBalance
-	} else if totalBalance, ok := balanceInfo["balance"].(float64); ok && totalBalance > 0 {
+	} else if totalBalance, ok := balanceInfo["totalWalletBalance"].(float64); ok && totalBalance > 0 {
+		// 如果可用余额为0，使用总余额作为备选
 		actualBalance = totalBalance
 	} else {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法获取可用余额"})

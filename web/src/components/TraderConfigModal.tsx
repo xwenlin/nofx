@@ -233,8 +233,9 @@ export function TraderConfigModal({
       }
 
       const response = await fetch(
-        `/api/account?trader_id=${traderData.trader_id}`,
+        `/nofx-api/traders/${traderData.trader_id}/sync-balance`,
         {
+          method: 'POST',
           headers: {
             Authorization: `Bearer ${token}`,
           },
@@ -242,21 +243,22 @@ export function TraderConfigModal({
       )
 
       if (!response.ok) {
-        throw new Error('获取账户余额失败')
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || '获取账户余额失败')
       }
 
       const data = await response.json()
 
-      // total_equity = 当前账户净值（包含未实现盈亏）
-      // 这应该作为新的初始余额
-      const currentBalance = data.total_equity || data.balance || 0
+      // sync-balance 端点返回 new_balance 字段
+      const currentBalance = data.new_balance || data.balance || 0
 
       setFormData((prev) => ({ ...prev, initial_balance: currentBalance }))
-      toast.success('已获取当前余额')
+      toast.success(`已获取当前余额: ${currentBalance.toFixed(2)} USDT`)
     } catch (error) {
       console.error('获取余额失败:', error)
-      setBalanceFetchError('获取余额失败，请检查网络连接')
-      toast.error('获取余额失败，请检查网络连接')
+      const errorMessage = error instanceof Error ? error.message : '获取余额失败，请检查网络连接'
+      setBalanceFetchError(errorMessage)
+      toast.error(errorMessage)
     } finally {
       setIsFetchingBalance(false)
     }
