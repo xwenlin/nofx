@@ -250,13 +250,14 @@ func calculateATR(klines []Kline, period int) float64 {
 // calculateIntradaySeries 计算日内系列数据
 func calculateIntradaySeries(klines []Kline) *IntradayData {
 	data := &IntradayData{
-		MidPrices:     make([]float64, 0, 10),
-		EMA20Values:   make([]float64, 0, 10),
-		MACDValues:    make([]float64, 0, 10),
-		RSI7Values:    make([]float64, 0, 10),
-		RSI14Values:   make([]float64, 0, 10),
-		Volumes:       make([]float64, 0, 10),
-		BuySellRatios: make([]float64, 0, 10),
+		MidPrices:      make([]float64, 0, 10),
+		EMA20Values:    make([]float64, 0, 10),
+		MACDValues:     make([]float64, 0, 10),
+		RSI7Values:     make([]float64, 0, 10),
+		RSI14Values:    make([]float64, 0, 10),
+		Volumes:        make([]float64, 0, 10),
+		TakerBuyRatios: make([]float64, 0, 10),
+		BuySellRatios:  make([]float64, 0, 10),
 	}
 
 	// 获取最近10个数据点（用于AI深度分析）
@@ -271,12 +272,26 @@ func calculateIntradaySeries(klines []Kline) *IntradayData {
 		// 计算成交量序列
 		data.Volumes = append(data.Volumes, klines[i].Volume)
 
-		// 计算买卖压力比（BuySellRatio = TakerBuyBaseVolume / Volume）
+		// 计算主动买入比率（Taker Buy Ratio = TakerBuyBaseVolume / Volume）
 		if klines[i].Volume > 0 {
-			buySellRatio := klines[i].TakerBuyBaseVolume / klines[i].Volume
-			data.BuySellRatios = append(data.BuySellRatios, buySellRatio)
+			takerBuyRatio := klines[i].TakerBuyBaseVolume / klines[i].Volume
+			data.TakerBuyRatios = append(data.TakerBuyRatios, takerBuyRatio)
 		} else {
-			data.BuySellRatios = append(data.BuySellRatios, 0.5) // 默认中性值
+			data.TakerBuyRatios = append(data.TakerBuyRatios, 0.5) // 默认中性值
+		}
+
+		// 计算买卖压力比（BuySellRatio = 买入量 / 卖出量 = TakerBuyBaseVolume / (Volume - TakerBuyBaseVolume)）
+		if klines[i].Volume > 0 {
+			takerSellVolume := klines[i].Volume - klines[i].TakerBuyBaseVolume
+			if takerSellVolume > 0 {
+				buySellRatio := klines[i].TakerBuyBaseVolume / takerSellVolume
+				data.BuySellRatios = append(data.BuySellRatios, buySellRatio)
+			} else {
+				// 如果卖出量为0，说明全部是买入，设置为一个很大的值表示强烈买入
+				data.BuySellRatios = append(data.BuySellRatios, 999.0)
+			}
+		} else {
+			data.BuySellRatios = append(data.BuySellRatios, 1.0) // 默认中性值（买入/卖出 = 1:1）
 		}
 
 		// 计算每个点的EMA20（需要至少20个数据点）
@@ -323,13 +338,14 @@ func calculateIntradaySeries(klines []Kline) *IntradayData {
 // calculateLongerTermData 计算长期数据
 func calculateLongerTermData(klines []Kline) *LongerTermData {
 	data := &LongerTermData{
-		MidPrices:     make([]float64, 0, 10),
-		EMA20Values:   make([]float64, 0, 10),
-		MACDValues:    make([]float64, 0, 10),
-		RSI7Values:    make([]float64, 0, 10),
-		RSI14Values:   make([]float64, 0, 10),
-		Volumes:       make([]float64, 0, 10),
-		BuySellRatios: make([]float64, 0, 10),
+		MidPrices:      make([]float64, 0, 10),
+		EMA20Values:    make([]float64, 0, 10),
+		MACDValues:     make([]float64, 0, 10),
+		RSI7Values:     make([]float64, 0, 10),
+		RSI14Values:    make([]float64, 0, 10),
+		Volumes:        make([]float64, 0, 10),
+		TakerBuyRatios: make([]float64, 0, 10),
+		BuySellRatios:  make([]float64, 0, 10),
 	}
 
 	// 计算EMA（单值，保留用于兼容）
@@ -364,12 +380,26 @@ func calculateLongerTermData(klines []Kline) *LongerTermData {
 		// 计算成交量序列
 		data.Volumes = append(data.Volumes, klines[i].Volume)
 
-		// 计算买卖压力比（BuySellRatio = TakerBuyBaseVolume / Volume）
+		// 计算主动买入比率（Taker Buy Ratio = TakerBuyBaseVolume / Volume）
 		if klines[i].Volume > 0 {
-			buySellRatio := klines[i].TakerBuyBaseVolume / klines[i].Volume
-			data.BuySellRatios = append(data.BuySellRatios, buySellRatio)
+			takerBuyRatio := klines[i].TakerBuyBaseVolume / klines[i].Volume
+			data.TakerBuyRatios = append(data.TakerBuyRatios, takerBuyRatio)
 		} else {
-			data.BuySellRatios = append(data.BuySellRatios, 0.5) // 默认中性值
+			data.TakerBuyRatios = append(data.TakerBuyRatios, 0.5) // 默认中性值
+		}
+
+		// 计算买卖压力比（BuySellRatio = 买入量 / 卖出量 = TakerBuyBaseVolume / (Volume - TakerBuyBaseVolume)）
+		if klines[i].Volume > 0 {
+			takerSellVolume := klines[i].Volume - klines[i].TakerBuyBaseVolume
+			if takerSellVolume > 0 {
+				buySellRatio := klines[i].TakerBuyBaseVolume / takerSellVolume
+				data.BuySellRatios = append(data.BuySellRatios, buySellRatio)
+			} else {
+				// 如果卖出量为0，说明全部是买入，设置为一个很大的值表示强烈买入
+				data.BuySellRatios = append(data.BuySellRatios, 999.0)
+			}
+		} else {
+			data.BuySellRatios = append(data.BuySellRatios, 1.0) // 默认中性值（买入/卖出 = 1:1）
 		}
 
 		// 计算每个点的EMA20序列（需要至少20个数据点）
@@ -595,6 +625,10 @@ func Format(data *Data) string {
 			sb.WriteString(fmt.Sprintf("Volumes: %s\n\n", formatFloatSlice(data.IntradaySeries.Volumes)))
 		}
 
+		if len(data.IntradaySeries.TakerBuyRatios) > 0 {
+			sb.WriteString(fmt.Sprintf("TakerBuyRatios: %s\n\n", formatFloatSlice(data.IntradaySeries.TakerBuyRatios)))
+		}
+
 		if len(data.IntradaySeries.BuySellRatios) > 0 {
 			sb.WriteString(fmt.Sprintf("BuySellRatios: %s\n\n", formatFloatSlice(data.IntradaySeries.BuySellRatios)))
 		}
@@ -628,6 +662,10 @@ func Format(data *Data) string {
 			sb.WriteString(fmt.Sprintf("Volumes: %s\n\n", formatFloatSlice(data.Series15m.Volumes)))
 		}
 
+		if len(data.Series15m.TakerBuyRatios) > 0 {
+			sb.WriteString(fmt.Sprintf("TakerBuyRatios: %s\n\n", formatFloatSlice(data.Series15m.TakerBuyRatios)))
+		}
+
 		if len(data.Series15m.BuySellRatios) > 0 {
 			sb.WriteString(fmt.Sprintf("BuySellRatios: %s\n\n", formatFloatSlice(data.Series15m.BuySellRatios)))
 		}
@@ -659,6 +697,10 @@ func Format(data *Data) string {
 
 		if len(data.Series1h.Volumes) > 0 {
 			sb.WriteString(fmt.Sprintf("Volumes: %s\n\n", formatFloatSlice(data.Series1h.Volumes)))
+		}
+
+		if len(data.Series1h.TakerBuyRatios) > 0 {
+			sb.WriteString(fmt.Sprintf("TakerBuyRatios: %s\n\n", formatFloatSlice(data.Series1h.TakerBuyRatios)))
 		}
 
 		if len(data.Series1h.BuySellRatios) > 0 {
@@ -701,6 +743,10 @@ func Format(data *Data) string {
 
 		if len(data.LongerTermContext.Volumes) > 0 {
 			sb.WriteString(fmt.Sprintf("Volumes: %s\n\n", formatFloatSlice(data.LongerTermContext.Volumes)))
+		}
+
+		if len(data.LongerTermContext.TakerBuyRatios) > 0 {
+			sb.WriteString(fmt.Sprintf("TakerBuyRatios: %s\n\n", formatFloatSlice(data.LongerTermContext.TakerBuyRatios)))
 		}
 
 		if len(data.LongerTermContext.BuySellRatios) > 0 {
