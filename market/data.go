@@ -31,7 +31,7 @@ func Get(symbol string) (*Data, error) {
 	var err error
 	// 标准化symbol
 	symbol = Normalize(symbol)
-	// 获取3分钟K线数据（获取100个用于计算指标，最后20个传递给AI）
+	// 获取3分钟K线数据（获取100个用于计算指标，最后10个传递给AI）
 	klines3m, err = WSMonitorCli.GetCurrentKlines(symbol, "3m") // 多获取一些用于计算
 	if err != nil {
 		return nil, fmt.Errorf("获取3分钟K线失败: %v", err)
@@ -49,19 +49,19 @@ func Get(symbol string) (*Data, error) {
 		return nil, fmt.Errorf("%s data is stale, possible cache failure", symbol)
 	}
 
-	// 获取15分钟K线数据（获取100个用于计算指标，最后20个传递给AI）
+	// 获取15分钟K线数据（获取100个用于计算指标，最后10个传递给AI）
 	klines15m, err = WSMonitorCli.GetCurrentKlines(symbol, "15m")
 	if err != nil {
 		return nil, fmt.Errorf("获取15分钟K线失败: %v", err)
 	}
 
-	// 获取1小时K线数据（获取100个用于计算指标，最后20个传递给AI）
+	// 获取1小时K线数据（获取100个用于计算指标，最后10个传递给AI）
 	klines1h, err = WSMonitorCli.GetCurrentKlines(symbol, "1h")
 	if err != nil {
 		return nil, fmt.Errorf("获取1小时K线失败: %v", err)
 	}
 
-	// 获取4小时K线数据（获取100个用于计算指标，最后20个传递给AI）
+	// 获取4小时K线数据（获取100个用于计算指标，最后10个传递给AI）
 	klines4h, err = WSMonitorCli.GetCurrentKlines(symbol, "4h") // 多获取用于计算指标
 	if err != nil {
 		return nil, fmt.Errorf("获取4小时K线失败: %v", err)
@@ -250,17 +250,17 @@ func calculateATR(klines []Kline, period int) float64 {
 // calculateIntradaySeries 计算日内系列数据
 func calculateIntradaySeries(klines []Kline) *IntradayData {
 	data := &IntradayData{
-		MidPrices:     make([]float64, 0, 20),
-		EMA20Values:   make([]float64, 0, 20),
-		MACDValues:    make([]float64, 0, 20),
-		RSI7Values:    make([]float64, 0, 20),
-		RSI14Values:   make([]float64, 0, 20),
-		Volumes:       make([]float64, 0, 20),
-		BuySellRatios: make([]float64, 0, 20),
+		MidPrices:     make([]float64, 0, 10),
+		EMA20Values:   make([]float64, 0, 10),
+		MACDValues:    make([]float64, 0, 10),
+		RSI7Values:    make([]float64, 0, 10),
+		RSI14Values:   make([]float64, 0, 10),
+		Volumes:       make([]float64, 0, 10),
+		BuySellRatios: make([]float64, 0, 10),
 	}
 
-	// 获取最近20个数据点（用于AI深度分析）
-	start := len(klines) - 20
+	// 获取最近10个数据点（用于AI深度分析）
+	start := len(klines) - 10
 	if start < 0 {
 		start = 0
 	}
@@ -323,13 +323,13 @@ func calculateIntradaySeries(klines []Kline) *IntradayData {
 // calculateLongerTermData 计算长期数据
 func calculateLongerTermData(klines []Kline) *LongerTermData {
 	data := &LongerTermData{
-		MidPrices:     make([]float64, 0, 20),
-		EMA20Values:   make([]float64, 0, 20),
-		MACDValues:    make([]float64, 0, 20),
-		RSI7Values:    make([]float64, 0, 20),
-		RSI14Values:   make([]float64, 0, 20),
-		Volumes:       make([]float64, 0, 20),
-		BuySellRatios: make([]float64, 0, 20),
+		MidPrices:     make([]float64, 0, 10),
+		EMA20Values:   make([]float64, 0, 10),
+		MACDValues:    make([]float64, 0, 10),
+		RSI7Values:    make([]float64, 0, 10),
+		RSI14Values:   make([]float64, 0, 10),
+		Volumes:       make([]float64, 0, 10),
+		BuySellRatios: make([]float64, 0, 10),
 	}
 
 	// 计算EMA（单值，保留用于兼容）
@@ -351,8 +351,8 @@ func calculateLongerTermData(klines []Kline) *LongerTermData {
 		data.AverageVolume = sum / float64(len(klines))
 	}
 
-	// 计算序列数据（获取最近20个数据点用于AI深度分析）
-	start := len(klines) - 20
+	// 计算序列数据（获取最近10个数据点用于AI深度分析）
+	start := len(klines) - 10
 	if start < 0 {
 		start = 0
 	}
