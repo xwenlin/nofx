@@ -21,11 +21,13 @@ type WSMonitor struct {
 	klineDataMap4h  sync.Map // 存储每个交易对的K线历史数据 - 4小时
 	tickerDataMap   sync.Map // 存储每个交易对的ticker数据
 	batchSize       int
-	filterSymbols   sync.Map     // 使用sync.Map来存储需要监控的币种和其状态
-	symbolStats     sync.Map     // 存储币种统计信息
-	FilterSymbol    []string     //经过筛选的币种
-	wsEnabled       bool         // WebSocket是否启用
-	mu              sync.RWMutex // 保护 wsEnabled 的读写
+	filterSymbols   sync.Map           // 使用sync.Map来存储需要监控的币种和其状态
+	symbolStats     sync.Map           // 存储币种统计信息
+	FilterSymbol    []string           //经过筛选的币种
+	wsEnabled       bool               // WebSocket是否启用
+	mu              sync.RWMutex       // 保护 wsEnabled 的读写
+	onNewKlineCb    OnNewKlineCallback // 新K线形成时的回调函数
+	cbMutex         sync.RWMutex       // 保护回调函数的读写
 }
 type SymbolStats struct {
 	LastActiveTime   time.Time
@@ -34,6 +36,12 @@ type SymbolStats struct {
 	LastAlertTime    time.Time
 	Score            float64 // 综合评分
 }
+
+// OnNewKlineCallback 新K线形成时的回调函数类型
+// symbol: 交易对符号
+// kline: 新形成的K线数据
+// duration: K线周期（如 "3m", "15m" 等）
+type OnNewKlineCallback func(symbol string, kline Kline, duration string)
 
 var WSMonitorCli *WSMonitor
 var subKlineTime = []string{"3m", "15m", "1h", "4h"} // 管理订阅流的K线周期
@@ -274,6 +282,7 @@ func (m *WSMonitor) processKlineUpdate(symbol string, wsData KlineWSData, _time 
 	var klineDataMap = m.getKlineDataMap(_time)
 	value, exists := klineDataMap.Load(symbol)
 	var klines []Kline
+	var isNewKline bool
 	if exists {
 		klines = value.([]Kline)
 
@@ -281,9 +290,11 @@ func (m *WSMonitor) processKlineUpdate(symbol string, wsData KlineWSData, _time 
 		if len(klines) > 0 && klines[len(klines)-1].OpenTime == kline.OpenTime {
 			// 更新当前K线
 			klines[len(klines)-1] = kline
+			isNewKline = false
 		} else {
 			// 添加新K线
 			klines = append(klines, kline)
+			isNewKline = true
 
 			// 保持数据长度
 			if len(klines) > 100 {
@@ -292,9 +303,28 @@ func (m *WSMonitor) processKlineUpdate(symbol string, wsData KlineWSData, _time 
 		}
 	} else {
 		klines = []Kline{kline}
+		isNewKline = true
 	}
 
 	klineDataMap.Store(symbol, klines)
+
+	// 如果是新的3分钟K线，触发回调（事件驱动决策）
+	if isNewKline && _time == "3m" {
+		m.cbMutex.RLock()
+		cb := m.onNewKlineCb
+		m.cbMutex.RUnlock()
+		if cb != nil {
+			// 异步调用回调，避免阻塞K线更新处理
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("⚠️  新K线回调函数panic: %v", r)
+					}
+				}()
+				cb(symbol, kline, _time)
+			}()
+		}
+	}
 }
 
 func (m *WSMonitor) GetCurrentKlines(symbol string, duration string) ([]Kline, error) {
@@ -342,6 +372,18 @@ func (m *WSMonitor) GetCurrentKlines(symbol string, duration string) ([]Kline, e
 	result := make([]Kline, len(klines))
 	copy(result, klines)
 	return result, nil
+}
+
+// SetOnNewKlineCallback 设置新K线形成时的回调函数
+func (m *WSMonitor) SetOnNewKlineCallback(cb OnNewKlineCallback) {
+	m.cbMutex.Lock()
+	defer m.cbMutex.Unlock()
+	m.onNewKlineCb = cb
+	if cb != nil {
+		log.Println("✅ 已注册新K线回调函数（事件驱动决策已启用）")
+	} else {
+		log.Println("⚠️  已清除新K线回调函数")
+	}
 }
 
 func (m *WSMonitor) Close() {
