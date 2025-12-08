@@ -426,7 +426,7 @@ func (at *AutoTrader) runCycle() error {
 	}
 
 	// 1. 检查是否需要停止交易
-	if time.Now().Before(at.stopUntil) {
+	if !at.stopUntil.IsZero() && time.Now().Before(at.stopUntil) {
 		remaining := time.Until(at.stopUntil)
 		log.Printf("⏸ 风险控制：暂停交易中，剩余 %.0f 分钟", remaining.Minutes())
 		record.Success = false

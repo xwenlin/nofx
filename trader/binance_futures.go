@@ -124,7 +124,7 @@ func syncBinanceServerTime(client *futures.Client) {
 
 // GetBalance 获取账户余额（带缓存和重试机制）
 func (t *FuturesTrader) GetBalance() (map[string]interface{}, error) {
-	// 先检查缓存是否有效
+	// 双重检查锁定：先检查缓存是否有效（读锁）
 	t.balanceCacheMutex.RLock()
 	if t.cachedBalance != nil && time.Since(t.balanceCacheTime) < t.cacheDuration {
 		cacheAge := time.Since(t.balanceCacheTime)
@@ -134,7 +134,17 @@ func (t *FuturesTrader) GetBalance() (map[string]interface{}, error) {
 	}
 	t.balanceCacheMutex.RUnlock()
 
-	// 缓存过期或不存在，调用API（带重试机制）
+	// 缓存过期或不存在，获取写锁准备更新缓存
+	t.balanceCacheMutex.Lock()
+	// 双重检查：在获取写锁后再次检查缓存（可能其他goroutine已经更新了）
+	if t.cachedBalance != nil && time.Since(t.balanceCacheTime) < t.cacheDuration {
+		cacheAge := time.Since(t.balanceCacheTime)
+		t.balanceCacheMutex.Unlock()
+		log.Printf("✓ 使用缓存的账户余额（缓存时间: %.1f秒前）", cacheAge.Seconds())
+		return t.cachedBalance, nil
+	}
+
+	// 缓存确实过期，调用API（带重试机制）
 	log.Printf("🔄 缓存过期，正在调用币安API获取账户余额...")
 
 	// 重试机制：专门处理时间戳错误
@@ -166,13 +176,15 @@ func (t *FuturesTrader) GetBalance() (map[string]interface{}, error) {
 			}
 		}
 
-		// 其他错误不重试，直接返回
+		// 其他错误不重试，直接返回（需要先释放锁）
 		log.Printf("❌ 币安API调用失败: %v", err)
+		t.balanceCacheMutex.Unlock()
 		return nil, fmt.Errorf("获取账户信息失败: %w", err)
 	}
 
-	// 如果所有重试都失败
+	// 如果所有重试都失败（需要先释放锁）
 	if account == nil {
+		t.balanceCacheMutex.Unlock()
 		return nil, fmt.Errorf("获取账户信息失败（已重试%d次）: %w", maxRetries, lastErr)
 	}
 
@@ -187,8 +199,7 @@ func (t *FuturesTrader) GetBalance() (map[string]interface{}, error) {
 		account.AvailableBalance,
 		account.TotalUnrealizedProfit)
 
-	// 更新缓存
-	t.balanceCacheMutex.Lock()
+	// 更新缓存（已经在写锁中，直接更新）
 	t.cachedBalance = result
 	t.balanceCacheTime = time.Now()
 	t.balanceCacheMutex.Unlock()
@@ -198,7 +209,7 @@ func (t *FuturesTrader) GetBalance() (map[string]interface{}, error) {
 
 // GetPositions 获取所有持仓（带缓存和重试机制）
 func (t *FuturesTrader) GetPositions() ([]map[string]interface{}, error) {
-	// 先检查缓存是否有效
+	// 双重检查锁定：先检查缓存是否有效（读锁）
 	t.positionsCacheMutex.RLock()
 	if t.cachedPositions != nil && time.Since(t.positionsCacheTime) < t.cacheDuration {
 		cacheAge := time.Since(t.positionsCacheTime)
@@ -208,7 +219,17 @@ func (t *FuturesTrader) GetPositions() ([]map[string]interface{}, error) {
 	}
 	t.positionsCacheMutex.RUnlock()
 
-	// 缓存过期或不存在，调用API（带重试机制）
+	// 缓存过期或不存在，获取写锁准备更新缓存
+	t.positionsCacheMutex.Lock()
+	// 双重检查：在获取写锁后再次检查缓存（可能其他goroutine已经更新了）
+	if t.cachedPositions != nil && time.Since(t.positionsCacheTime) < t.cacheDuration {
+		cacheAge := time.Since(t.positionsCacheTime)
+		t.positionsCacheMutex.Unlock()
+		log.Printf("✓ 使用缓存的持仓信息（缓存时间: %.1f秒前）", cacheAge.Seconds())
+		return t.cachedPositions, nil
+	}
+
+	// 缓存确实过期，调用API（带重试机制）
 	log.Printf("🔄 缓存过期，正在调用币安API获取持仓信息...")
 
 	// 重试机制：专门处理时间戳错误
@@ -240,11 +261,14 @@ func (t *FuturesTrader) GetPositions() ([]map[string]interface{}, error) {
 			}
 		}
 
-		// 其他错误不重试，直接返回
+		// 其他错误不重试，直接返回（需要先释放锁）
+		t.positionsCacheMutex.Unlock()
 		return nil, fmt.Errorf("获取持仓失败: %w", err)
 	}
 
 	if lastErr != nil && len(positions) == 0 {
+		// 所有重试都失败（需要先释放锁）
+		t.positionsCacheMutex.Unlock()
 		return nil, fmt.Errorf("获取持仓失败（已重试%d次）: %w", maxRetries, lastErr)
 	}
 
@@ -274,8 +298,7 @@ func (t *FuturesTrader) GetPositions() ([]map[string]interface{}, error) {
 		result = append(result, posMap)
 	}
 
-	// 更新缓存
-	t.positionsCacheMutex.Lock()
+	// 更新缓存（已经在写锁中，直接更新）
 	t.cachedPositions = result
 	t.positionsCacheTime = time.Now()
 	t.positionsCacheMutex.Unlock()

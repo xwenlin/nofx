@@ -1790,6 +1790,13 @@ func (s *Server) handleRegister(c *gin.Context) {
 		return
 	}
 
+	// 检查注册功能是否已启用
+	registrationEnabledStr, _ := s.database.GetSystemConfig("registration_enabled")
+	if registrationEnabledStr == "false" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "注册功能已关闭"})
+		return
+	}
+
 	// 检查是否开启了内测模式
 	betaModeStr, _ := s.database.GetSystemConfig("beta_mode")
 	if betaModeStr == "true" {
@@ -1964,9 +1971,14 @@ func (s *Server) handleLogin(c *gin.Context) {
 
 	// 检查OTP是否已验证
 	if !user.OTPVerified {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"error":              "账户未完成OTP设置",
+		// 返回OTP设置信息，让用户完成OTP设置
+		qrCodeURL := auth.GetOTPQRCodeURL(user.OTPSecret, user.Email)
+		c.JSON(http.StatusOK, gin.H{
 			"user_id":            user.ID,
+			"email":              user.Email,
+			"otp_secret":         user.OTPSecret,
+			"qr_code_url":        qrCodeURL,
+			"message":            "请完成OTP设置",
 			"requires_otp_setup": true,
 		})
 		return

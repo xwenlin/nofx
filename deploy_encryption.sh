@@ -135,7 +135,7 @@ migrate_data() {
             fi
         fi
 
-        if go run scripts/migrate_encryption.go; then
+        if go run scripts/migrate_encryption/migrate_encryption.go; then
             log_success "數據遷移完成"
         else
             log_error "數據遷移失敗"

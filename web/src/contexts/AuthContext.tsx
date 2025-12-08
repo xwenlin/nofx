@@ -19,6 +19,9 @@ interface AuthContextType {
     message?: string
     userID?: string
     requiresOTP?: boolean
+    requiresOTPSetup?: boolean
+    otpSecret?: string
+    qrCodeURL?: string
   }>
   loginAdmin: (password: string) => Promise<{
     success: boolean
@@ -120,6 +123,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const data = await response.json()
 
       if (response.ok) {
+        // 处理需要OTP设置的情况（首次登录，未完成OTP设置）
+        if (data.requires_otp_setup) {
+          return {
+            success: true,
+            userID: data.user_id,
+            otpSecret: data.otp_secret,
+            qrCodeURL: data.qr_code_url,
+            requiresOTPSetup: true,
+            message: data.message,
+          }
+        }
+        // 处理需要OTP验证的情况（已完成OTP设置，需要输入验证码）
         if (data.requires_otp) {
           return {
             success: true,
@@ -127,6 +142,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             requiresOTP: true,
             message: data.message,
           }
+        }
+        // 直接登录成功（理论上不应该发生，因为总是需要OTP）
+        if (data.token) {
+          reset401Flag()
+          const userInfo = { id: data.user_id, email: data.email }
+          setToken(data.token)
+          setUser(userInfo)
+          localStorage.setItem('auth_token', data.token)
+          localStorage.setItem('auth_user', JSON.stringify(userInfo))
+          return { success: true, message: data.message }
         }
       } else {
         return { success: false, message: data.error }

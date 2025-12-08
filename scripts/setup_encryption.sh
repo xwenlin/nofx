@@ -170,20 +170,21 @@ if [ "$KEY_SKIPPED" != "true" ]; then
     # 生成新的密钥
     echo -e "  ${CYAN}生成AES-256数据加密密钥...${NC}"
     DATA_KEY=$(openssl rand -base64 32)
-    echo -e "${GREEN}  ✓ 数据加密密钥生成完成${NC}"
+    echo -e "${GREEN}  ✓ 数据加密密钥生成完成${NC}: $DATA_KEY"
     
     echo -e "  ${CYAN}生成JWT认证密钥...${NC}"
-    JWT_KEY=$(openssl rand -base64 64)
-    echo -e "${GREEN}  ✓ JWT认证密钥生成完成${NC}"
+    # 添加 | tr -d '\n' 以去除 Base64 自动添加的换行符
+    JWT_KEY=$(openssl rand -base64 64 | tr -d '\n')
+    echo -e "${GREEN}  ✓ JWT认证密钥生成完成${NC}: $JWT_KEY"
     
     # 保存到.env文件
     if [ -f ".env" ]; then
         # 更新现有文件
         if grep -q "^DATA_ENCRYPTION_KEY=" .env; then
             if [[ "$OSTYPE" == "darwin"* ]]; then
-                sed -i '' "s/^DATA_ENCRYPTION_KEY=.*/DATA_ENCRYPTION_KEY=$DATA_KEY/" .env
+                sed -i '' "s|^DATA_ENCRYPTION_KEY=.*|DATA_ENCRYPTION_KEY=\"$DATA_KEY\"|" .env
             else
-                sed -i "s/^DATA_ENCRYPTION_KEY=.*/DATA_ENCRYPTION_KEY=$DATA_KEY/" .env
+                sed -i "s|^DATA_ENCRYPTION_KEY=.*|DATA_ENCRYPTION_KEY=\"$DATA_KEY\"|" .env
             fi
         else
             echo "DATA_ENCRYPTION_KEY=$DATA_KEY" >> .env
