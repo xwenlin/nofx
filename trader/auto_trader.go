@@ -114,6 +114,8 @@ type AutoTrader struct {
 	cycleRunning           bool                        // 周期是否正在执行中
 	processedKlines        sync.Map                    // 防抖缓存：已处理的K线OpenTime (symbol -> map[int64]bool)
 	lastEventTriggerTime   time.Time                   // 上次事件触发时间（用于防抖）
+	lastCycleTime          time.Time                   // 上次决策周期执行时间（用于避免定时器和事件驱动重复触发）
+	lastCycleTimeMutex     sync.RWMutex                // 保护lastCycleTime的读写锁
 	eventTriggerMutex      sync.Mutex                  // 保护事件触发相关字段
 }
 
@@ -291,6 +293,22 @@ func (at *AutoTrader) handleNewKlineEvent(symbol string, kline market.Kline, dur
 		return
 	}
 
+	// 检查距离上次决策执行时间是否太近（避免过于频繁的决策）
+	at.lastCycleTimeMutex.RLock()
+	lastCycleTime := at.lastCycleTime
+	at.lastCycleTimeMutex.RUnlock()
+
+	// 如果距离上次执行时间小于2分30秒（3分钟K线的合理间隔），可能是异常事件，需要确认
+	const minCycleInterval = 150 * time.Second // 2分30秒
+	if !lastCycleTime.IsZero() {
+		timeSinceLastCycle := time.Since(lastCycleTime)
+		if timeSinceLastCycle < minCycleInterval {
+			log.Printf("⏸ 距离上次决策执行仅 %.1f 秒（小于最小间隔 %.1f 秒），跳过本次事件触发（避免过于频繁）",
+				timeSinceLastCycle.Seconds(), minCycleInterval.Seconds())
+			return
+		}
+	}
+
 	// 记录事件触发日志
 	log.Printf("⚡ 事件驱动：检测到新3分钟K线形成 [%s] OpenTime: %d，立即触发决策", symbol, kline.OpenTime)
 
@@ -349,6 +367,23 @@ func (at *AutoTrader) Run() error {
 				continue
 			}
 
+			// 检查距离上次执行时间是否太近（避免事件驱动和定时器重复触发）
+			at.lastCycleTimeMutex.RLock()
+			lastCycleTime := at.lastCycleTime
+			at.lastCycleTimeMutex.RUnlock()
+
+			// 如果距离上次执行时间小于扫描间隔的90%，说明事件驱动刚触发过，跳过定时器触发
+			// 例如：3分钟×90% = 2分42秒，只有当超过2分42秒未执行时，定时器才会介入
+			minInterval := time.Duration(float64(at.config.ScanInterval) * 0.9) // 扫描间隔的90%
+			if !lastCycleTime.IsZero() {
+				timeSinceLastCycle := time.Since(lastCycleTime)
+				if timeSinceLastCycle < minInterval {
+					log.Printf("⏸ 距离上次决策执行仅 %.1f 秒（小于最小间隔 %.1f 秒），跳过定时器触发（可能已由事件驱动触发）",
+						timeSinceLastCycle.Seconds(), minInterval.Seconds())
+					continue
+				}
+			}
+
 			// 正常执行周期（定时器兜底）
 			log.Printf("⏰ 定时器触发决策（兜底机制）")
 			if err := at.runCycle(); err != nil {
@@ -396,11 +431,16 @@ func (at *AutoTrader) runCycle() error {
 	at.cycleRunning = true
 	at.cycleMutex.Unlock()
 
-	// 确保在函数退出时清除执行标志
+	// 确保在函数退出时清除执行标志并更新最后执行时间
 	defer func() {
 		at.cycleMutex.Lock()
 		at.cycleRunning = false
 		at.cycleMutex.Unlock()
+
+		// 更新最后执行时间（无论成功或失败都更新，防止重复触发）
+		at.lastCycleTimeMutex.Lock()
+		at.lastCycleTime = time.Now()
+		at.lastCycleTimeMutex.Unlock()
 	}()
 
 	// 记录周期开始时间
