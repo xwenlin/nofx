@@ -296,7 +296,14 @@ func (at *AutoTrader) handleNewKlineEvent(symbol string, kline market.Kline, dur
 	at.cycleMutex.Unlock()
 
 	if isRunning {
-		log.Printf("⏸ 周期正在执行中，跳过事件触发（等待当前周期完成）")
+		// 如果正在执行，也需要更新lastCycleTime为事件触发时间
+		// 这样定时器检查时会发现时间间隔很短，自动跳过，确保事件驱动的优先级
+		eventTime := time.Now()
+		at.lastCycleTimeMutex.Lock()
+		at.lastCycleTime = eventTime
+		at.lastCycleTimeMutex.Unlock()
+
+		log.Printf("⏸ 周期正在执行中，已更新lastCycleTime，定时器将自动跳过（事件驱动优先级已保证）")
 		return
 	}
 
