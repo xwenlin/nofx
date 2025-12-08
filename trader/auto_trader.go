@@ -112,8 +112,7 @@ type AutoTrader struct {
 	userID                 string                      // 用户ID
 	cycleMutex             sync.Mutex                  // 防止周期并发执行的互斥锁
 	cycleRunning           bool                        // 周期是否正在执行中
-	processedKlines        sync.Map                    // 防抖缓存：已处理的K线OpenTime (symbol -> map[int64]bool)
-	lastEventTriggerTime   time.Time                   // 上次事件触发时间（用于防抖）
+	processedKlines        sync.Map                    // 防抖缓存：已处理的K线OpenTime (__global__ -> map[int64]bool)
 	lastCycleTime          time.Time                   // 上次决策周期执行时间（用于避免定时器和事件驱动重复触发）
 	lastCycleTimeMutex     sync.RWMutex                // 保护lastCycleTime的读写锁
 	eventTriggerMutex      sync.Mutex                  // 保护事件触发相关字段
@@ -248,39 +247,47 @@ func NewAutoTrader(config AutoTraderConfig, database interface{}, userID string)
 
 // handleNewKlineEvent 处理新K线形成事件（事件驱动决策）
 func (at *AutoTrader) handleNewKlineEvent(symbol string, kline market.Kline, duration string) {
-	// 防抖检查：避免同一根K线触发多次决策
+	// 多个币种的K线会在同一时间形成，我们只需要触发一次决策
+	// 使用K线的OpenTime作为唯一标识，而不是symbol+OpenTime
+
 	at.eventTriggerMutex.Lock()
 
-	// 检查是否已经处理过这根K线
-	symbolKlines, exists := at.processedKlines.Load(symbol)
+	// 检查这个时间点的K线是否已经触发过决策
+	// 使用全局的处理标记，而不是按symbol分开
+	globalProcessedKlines, exists := at.processedKlines.Load("__global__")
 	var processedMap map[int64]bool
 	if exists {
-		processedMap = symbolKlines.(map[int64]bool)
+		processedMap = globalProcessedKlines.(map[int64]bool)
 	} else {
 		processedMap = make(map[int64]bool)
-		at.processedKlines.Store(symbol, processedMap)
+		at.processedKlines.Store("__global__", processedMap)
 	}
 
-	// 如果已经处理过这根K线，直接返回
+	// 如果这个时间点已经触发过决策，直接返回
 	if processedMap[kline.OpenTime] {
 		at.eventTriggerMutex.Unlock()
 		return
 	}
 
-	// 标记为已处理
+	// 标记这个时间点已处理
 	processedMap[kline.OpenTime] = true
-	at.processedKlines.Store(symbol, processedMap)
+	at.processedKlines.Store("__global__", processedMap)
 
-	// 检查最小触发间隔（防抖：至少间隔10秒，避免过于频繁）
-	const minEventInterval = 10 * time.Second
-	now := time.Now()
-	if !at.lastEventTriggerTime.IsZero() && now.Sub(at.lastEventTriggerTime) < minEventInterval {
-		at.eventTriggerMutex.Unlock()
-		log.Printf("⏸ 事件触发过于频繁（距离上次 %.1f 秒），跳过本次触发（防抖）", now.Sub(at.lastEventTriggerTime).Seconds())
-		return
+	// 清理旧的记录（保留最近10个，避免内存泄漏）
+	if len(processedMap) > 10 {
+		// 找到最小的OpenTime并删除
+		var minTime int64 = -1
+		for t := range processedMap {
+			if minTime == -1 || t < minTime {
+				minTime = t
+			}
+		}
+		if minTime != -1 {
+			delete(processedMap, minTime)
+			at.processedKlines.Store("__global__", processedMap)
+		}
 	}
 
-	at.lastEventTriggerTime = now
 	at.eventTriggerMutex.Unlock()
 
 	// 检查周期是否正在执行
@@ -293,24 +300,8 @@ func (at *AutoTrader) handleNewKlineEvent(symbol string, kline market.Kline, dur
 		return
 	}
 
-	// 检查距离上次决策执行时间是否太近（避免过于频繁的决策）
-	at.lastCycleTimeMutex.RLock()
-	lastCycleTime := at.lastCycleTime
-	at.lastCycleTimeMutex.RUnlock()
-
-	// 如果距离上次执行时间小于2分30秒（3分钟K线的合理间隔），可能是异常事件，需要确认
-	const minCycleInterval = 150 * time.Second // 2分30秒
-	if !lastCycleTime.IsZero() {
-		timeSinceLastCycle := time.Since(lastCycleTime)
-		if timeSinceLastCycle < minCycleInterval {
-			log.Printf("⏸ 距离上次决策执行仅 %.1f 秒（小于最小间隔 %.1f 秒），跳过本次事件触发（避免过于频繁）",
-				timeSinceLastCycle.Seconds(), minCycleInterval.Seconds())
-			return
-		}
-	}
-
 	// 记录事件触发日志
-	log.Printf("⚡ 事件驱动：检测到新3分钟K线形成 [%s] OpenTime: %d，立即触发决策", symbol, kline.OpenTime)
+	log.Printf("⚡ 事件驱动：检测到新3分钟K线形成（时间戳: %d），立即触发决策", kline.OpenTime)
 
 	// 触发决策周期
 	if err := at.runCycle(); err != nil {
@@ -367,19 +358,20 @@ func (at *AutoTrader) Run() error {
 				continue
 			}
 
-			// 检查距离上次执行时间是否太近（避免事件驱动和定时器重复触发）
+			// 检查距离上次决策开始时间（避免定时器在事件驱动正常工作时介入）
 			at.lastCycleTimeMutex.RLock()
 			lastCycleTime := at.lastCycleTime
 			at.lastCycleTimeMutex.RUnlock()
 
-			// 如果距离上次执行时间小于扫描间隔的90%，说明事件驱动刚触发过，跳过定时器触发
-			// 例如：3分钟×90% = 2分42秒，只有当超过2分42秒未执行时，定时器才会介入
-			minInterval := time.Duration(float64(at.config.ScanInterval) * 0.9) // 扫描间隔的90%
+			// 定时器兜底逻辑：
+			// - 如果距离上次决策 < 扫描间隔（3分钟），说明在一个完整周期内已经执行过，定时器跳过
+			// - 只有超过一个完整周期（3分钟）都没有执行，才说明事件驱动失败，定时器才会介入兜底
+			// - 这确保定时器真正成为纯粹的兜底机制，不会干扰正常的事件驱动
 			if !lastCycleTime.IsZero() {
 				timeSinceLastCycle := time.Since(lastCycleTime)
-				if timeSinceLastCycle < minInterval {
-					log.Printf("⏸ 距离上次决策执行仅 %.1f 秒（小于最小间隔 %.1f 秒），跳过定时器触发（可能已由事件驱动触发）",
-						timeSinceLastCycle.Seconds(), minInterval.Seconds())
+				if timeSinceLastCycle < at.config.ScanInterval {
+					log.Printf("⏸ 距离上次决策开始仅 %.1f 秒（小于周期 %.0f 秒），跳过定时器触发（事件驱动工作正常）",
+						timeSinceLastCycle.Seconds(), at.config.ScanInterval.Seconds())
 					continue
 				}
 			}
@@ -431,20 +423,19 @@ func (at *AutoTrader) runCycle() error {
 	at.cycleRunning = true
 	at.cycleMutex.Unlock()
 
-	// 确保在函数退出时清除执行标志并更新最后执行时间
+	// 记录决策开始时间（用于防止定时器和事件驱动重复触发）
+	cycleStartTime := time.Now()
+	at.lastCycleTimeMutex.Lock()
+	at.lastCycleTime = cycleStartTime
+	at.lastCycleTimeMutex.Unlock()
+
+	// 确保在函数退出时清除执行标志
 	defer func() {
 		at.cycleMutex.Lock()
 		at.cycleRunning = false
 		at.cycleMutex.Unlock()
-
-		// 更新最后执行时间（无论成功或失败都更新，防止重复触发）
-		at.lastCycleTimeMutex.Lock()
-		at.lastCycleTime = time.Now()
-		at.lastCycleTimeMutex.Unlock()
 	}()
 
-	// 记录周期开始时间
-	cycleStartTime := time.Now()
 	at.callCount++
 
 	separator := strings.Repeat("=", 70)
