@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"math"
+	"nofx/config"
 	"os"
 	"path/filepath"
 	"time"
@@ -328,7 +329,172 @@ type SymbolPerformance struct {
 }
 
 // AnalyzePerformance 分析最近N个周期的交易表现
-func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAnalysis, error) {
+// 如果提供了 database 和 traderID，则从数据库查询（更高效）；否则从日志文件查询（向后兼容）
+func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int, database interface{}, traderID string) (*PerformanceAnalysis, error) {
+	// 如果提供了数据库，优先使用数据库查询
+	if database != nil && traderID != "" {
+		return l.analyzePerformanceFromDB(database, traderID)
+	}
+
+	// 否则使用原来的文件查询方式（向后兼容）
+	return l.analyzePerformanceFromFiles(lookbackCycles)
+}
+
+// analyzePerformanceFromDB 从数据库分析交易表现
+func (l *DecisionLogger) analyzePerformanceFromDB(database interface{}, traderID string) (*PerformanceAnalysis, error) {
+	db, ok := database.(interface {
+		GetTradesByTrader(traderID string, limit int) ([]*config.TradeRecord, error)
+	})
+	if !ok {
+		return nil, fmt.Errorf("数据库接口不支持 GetTradesByTrader")
+	}
+
+	// 获取最近20笔已平仓的交易（用于计算所有指标）
+	trades, err := db.GetTradesByTrader(traderID, 20)
+	if err != nil {
+		return nil, fmt.Errorf("从数据库查询交易记录失败: %w", err)
+	}
+
+	analysis := &PerformanceAnalysis{
+		RecentTrades: []TradeOutcome{},
+		SymbolStats:  make(map[string]*SymbolPerformance),
+	}
+
+	// 转换数据库记录为 TradeOutcome
+	for _, trade := range trades {
+		if trade.CloseTime.IsZero() {
+			continue // 跳过未平仓的交易
+		}
+
+		duration := trade.CloseTime.Sub(trade.OpenTime).String()
+		outcome := TradeOutcome{
+			Symbol:        trade.Symbol,
+			Side:          trade.Side,
+			Quantity:      trade.Quantity,
+			Leverage:      trade.Leverage,
+			OpenPrice:     trade.OpenPrice,
+			ClosePrice:    trade.ClosePrice,
+			PositionValue: trade.Quantity * trade.OpenPrice,
+			MarginUsed:    (trade.Quantity * trade.OpenPrice) / float64(trade.Leverage),
+			PnL:           trade.PnL,
+			PnLPct:        trade.PnLPct,
+			Duration:      duration,
+			OpenTime:      trade.OpenTime,
+			CloseTime:     trade.CloseTime,
+			WasStopLoss:   trade.WasStopLoss,
+		}
+		analysis.RecentTrades = append(analysis.RecentTrades, outcome)
+	}
+
+	// 反转数组，让最新的在前
+	if len(analysis.RecentTrades) > 0 {
+		for i, j := 0, len(analysis.RecentTrades)-1; i < j; i, j = i+1, j-1 {
+			analysis.RecentTrades[i], analysis.RecentTrades[j] = analysis.RecentTrades[j], analysis.RecentTrades[i]
+		}
+	}
+
+	// 计算统计指标（使用最近20笔交易）
+	tradesForStats := analysis.RecentTrades
+	if len(tradesForStats) > 20 {
+		tradesForStats = tradesForStats[:20]
+	}
+
+	// 计算总交易数、胜率等
+	analysis.TotalTrades = len(tradesForStats)
+	analysis.WinningTrades = 0
+	analysis.LosingTrades = 0
+	totalWinAmount := 0.0
+	totalLossAmount := 0.0
+
+	for _, trade := range tradesForStats {
+		if trade.PnLPct > 0 {
+			analysis.WinningTrades++
+			totalWinAmount += trade.PnL
+		} else if trade.PnLPct < 0 {
+			analysis.LosingTrades++
+			totalLossAmount += math.Abs(trade.PnL)
+		}
+	}
+
+	if analysis.TotalTrades > 0 {
+		analysis.WinRate = (float64(analysis.WinningTrades) / float64(analysis.TotalTrades)) * 100
+		if analysis.WinningTrades > 0 {
+			analysis.AvgWin = totalWinAmount / float64(analysis.WinningTrades)
+			analysis.AvgWinPct = 0.0
+			for _, trade := range tradesForStats {
+				if trade.PnLPct > 0 {
+					analysis.AvgWinPct += trade.PnLPct
+				}
+			}
+			analysis.AvgWinPct = analysis.AvgWinPct / float64(analysis.WinningTrades)
+		}
+		if analysis.LosingTrades > 0 {
+			analysis.AvgLoss = totalLossAmount / float64(analysis.LosingTrades)
+			analysis.AvgLossPct = 0.0
+			for _, trade := range tradesForStats {
+				if trade.PnLPct < 0 {
+					analysis.AvgLossPct += math.Abs(trade.PnLPct)
+				}
+			}
+			analysis.AvgLossPct = analysis.AvgLossPct / float64(analysis.LosingTrades)
+		}
+		if totalLossAmount > 0 {
+			analysis.ProfitFactor = totalWinAmount / totalLossAmount
+		}
+	}
+
+	// 计算币种统计
+	for _, trade := range tradesForStats {
+		if _, exists := analysis.SymbolStats[trade.Symbol]; !exists {
+			analysis.SymbolStats[trade.Symbol] = &SymbolPerformance{
+				Symbol:        trade.Symbol,
+				TotalTrades:   0,
+				WinningTrades: 0,
+				LosingTrades:  0,
+				TotalPnL:      0.0,
+			}
+		}
+		stats := analysis.SymbolStats[trade.Symbol]
+		stats.TotalTrades++
+		if trade.PnLPct > 0 {
+			stats.WinningTrades++
+		} else if trade.PnLPct < 0 {
+			stats.LosingTrades++
+		}
+		stats.TotalPnL += trade.PnL
+	}
+
+	// 计算最佳和最差币种
+	bestPnL := -math.MaxFloat64
+	worstPnL := math.MaxFloat64
+	for symbol, stats := range analysis.SymbolStats {
+		if stats.TotalPnL > bestPnL {
+			bestPnL = stats.TotalPnL
+			analysis.BestSymbol = symbol
+		}
+		if stats.TotalPnL < worstPnL {
+			worstPnL = stats.TotalPnL
+			analysis.WorstSymbol = symbol
+		}
+		if stats.TotalTrades > 0 {
+			stats.WinRate = (float64(stats.WinningTrades) / float64(stats.TotalTrades)) * 100
+			stats.AvgPnL = stats.TotalPnL / float64(stats.TotalTrades)
+		}
+	}
+
+	// 计算夏普比率
+	analysis.SharpeRatio = l.calculateRollingSharpeRatio(tradesForStats)
+
+	// 限制 RecentTrades 为最近10笔（用于显示）
+	if len(analysis.RecentTrades) > 10 {
+		analysis.RecentTrades = analysis.RecentTrades[:10]
+	}
+
+	return analysis, nil
+}
+
+// analyzePerformanceFromFiles 从日志文件分析交易表现（原来的实现，向后兼容）
+func (l *DecisionLogger) analyzePerformanceFromFiles(lookbackCycles int) (*PerformanceAnalysis, error) {
 	records, err := l.GetLatestRecords(lookbackCycles)
 	if err != nil {
 		return nil, fmt.Errorf("读取历史记录失败: %w", err)
@@ -625,39 +791,83 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 		}
 	}
 
+	// 反转数组，让最新的在前
+	if len(analysis.RecentTrades) > 0 {
+		for i, j := 0, len(analysis.RecentTrades)-1; i < j; i, j = i+1, j-1 {
+			analysis.RecentTrades[i], analysis.RecentTrades[j] = analysis.RecentTrades[j], analysis.RecentTrades[i]
+		}
+	}
+
+	// 只取最近20笔交易用于计算所有统计指标
+	var tradesForStats []TradeOutcome
+	if len(analysis.RecentTrades) > 20 {
+		tradesForStats = make([]TradeOutcome, 20)
+		copy(tradesForStats, analysis.RecentTrades[:20])
+	} else {
+		tradesForStats = make([]TradeOutcome, len(analysis.RecentTrades))
+		copy(tradesForStats, analysis.RecentTrades)
+	}
+
+	// 基于最近20笔交易重新计算所有统计指标
+	analysis.TotalTrades = len(tradesForStats)
+	analysis.WinningTrades = 0
+	analysis.LosingTrades = 0
+	analysis.AvgWin = 0.0
+	analysis.AvgLoss = 0.0
+	analysis.AvgWinPct = 0.0
+	analysis.AvgLossPct = 0.0
+	totalWinAmount := 0.0
+	totalLossAmount := 0.0
+	winSumPct := 0.0
+	winCountPct := 0
+	lossSumPct := 0.0
+	lossCountPct := 0
+
+	// 重新计算币种统计（基于最近20笔交易）
+	analysis.SymbolStats = make(map[string]*SymbolPerformance)
+	bestPnL := -999999.0
+	worstPnL := 999999.0
+
+	for _, trade := range tradesForStats {
+		// 统计盈亏
+		if trade.PnL > 0 {
+			analysis.WinningTrades++
+			totalWinAmount += trade.PnL
+			winSumPct += trade.PnLPct
+			winCountPct++
+		} else if trade.PnL < 0 {
+			analysis.LosingTrades++
+			totalLossAmount += trade.PnL
+			lossSumPct += trade.PnLPct
+			lossCountPct++
+		}
+
+		// 更新币种统计
+		if _, exists := analysis.SymbolStats[trade.Symbol]; !exists {
+			analysis.SymbolStats[trade.Symbol] = &SymbolPerformance{
+				Symbol: trade.Symbol,
+			}
+		}
+		stats := analysis.SymbolStats[trade.Symbol]
+		stats.TotalTrades++
+		stats.TotalPnL += trade.PnL
+		if trade.PnL > 0 {
+			stats.WinningTrades++
+		} else if trade.PnL < 0 {
+			stats.LosingTrades++
+		}
+	}
+
 	// 计算统计指标
 	if analysis.TotalTrades > 0 {
 		analysis.WinRate = (float64(analysis.WinningTrades) / float64(analysis.TotalTrades)) * 100
 
-		// 计算总盈利和总亏损
-		totalWinAmount := analysis.AvgWin   // 当前是累加的总和
-		totalLossAmount := analysis.AvgLoss // 当前是累加的总和（负数）
-
 		if analysis.WinningTrades > 0 {
-			analysis.AvgWin /= float64(analysis.WinningTrades)
-		}
-		if analysis.LosingTrades > 0 {
-			analysis.AvgLoss /= float64(analysis.LosingTrades)
-		}
-
-		// 计算平均盈亏百分比（基于所有交易记录）
-		winSumPct := 0.0
-		winCountPct := 0
-		lossSumPct := 0.0
-		lossCountPct := 0
-		for _, trade := range analysis.RecentTrades {
-			if trade.PnLPct > 0 {
-				winSumPct += trade.PnLPct
-				winCountPct++
-			} else if trade.PnLPct < 0 {
-				lossSumPct += trade.PnLPct
-				lossCountPct++
-			}
-		}
-		if winCountPct > 0 {
+			analysis.AvgWin = totalWinAmount / float64(analysis.WinningTrades)
 			analysis.AvgWinPct = winSumPct / float64(winCountPct)
 		}
-		if lossCountPct > 0 {
+		if analysis.LosingTrades > 0 {
+			analysis.AvgLoss = totalLossAmount / float64(analysis.LosingTrades)
 			analysis.AvgLossPct = lossSumPct / float64(lossCountPct)
 		}
 
@@ -672,8 +882,6 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 	}
 
 	// 计算各币种胜率和平均盈亏
-	bestPnL := -999999.0
-	worstPnL := 999999.0
 	for symbol, stats := range analysis.SymbolStats {
 		if stats.TotalTrades > 0 {
 			stats.WinRate = (float64(stats.WinningTrades) / float64(stats.TotalTrades)) * 100
@@ -690,34 +898,13 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 		}
 	}
 
-	// 反转数组，让最新的在前
-	if len(analysis.RecentTrades) > 0 {
-		for i, j := 0, len(analysis.RecentTrades)-1; i < j; i, j = i+1, j-1 {
-			analysis.RecentTrades[i], analysis.RecentTrades[j] = analysis.RecentTrades[j], analysis.RecentTrades[i]
-		}
+	// 计算滚动夏普比率（基于最近20笔交易，或全部交易如果不足20笔）
+	// 反转回时间顺序（旧到新），用于计算
+	tradesForSharpe := make([]TradeOutcome, len(tradesForStats))
+	copy(tradesForSharpe, tradesForStats)
+	for i, j := 0, len(tradesForSharpe)-1; i < j; i, j = i+1, j-1 {
+		tradesForSharpe[i], tradesForSharpe[j] = tradesForSharpe[j], tradesForSharpe[i]
 	}
-
-	// 计算滚动夏普比率（基于过去20笔交易，或全部交易如果不足20笔）
-	var tradesForSharpe []TradeOutcome
-	if len(analysis.RecentTrades) > 20 {
-		// 取最近20笔交易（数组已反转，最新的在前）
-		tradesForSharpe = make([]TradeOutcome, 20)
-		copy(tradesForSharpe, analysis.RecentTrades[:20])
-		// 反转回时间顺序（旧到新），用于计算
-		for i, j := 0, len(tradesForSharpe)-1; i < j; i, j = i+1, j-1 {
-			tradesForSharpe[i], tradesForSharpe[j] = tradesForSharpe[j], tradesForSharpe[i]
-		}
-	} else {
-		// 交易数不足20笔，使用所有交易
-		tradesForSharpe = make([]TradeOutcome, len(analysis.RecentTrades))
-		copy(tradesForSharpe, analysis.RecentTrades)
-		// 反转回时间顺序（旧到新），用于计算
-		for i, j := 0, len(tradesForSharpe)-1; i < j; i, j = i+1, j-1 {
-			tradesForSharpe[i], tradesForSharpe[j] = tradesForSharpe[j], tradesForSharpe[i]
-		}
-	}
-
-	// 计算滚动夏普比率（基于过去最多20笔交易的收益率，如果不足20笔则使用全部）
 	analysis.SharpeRatio = l.calculateRollingSharpeRatio(tradesForSharpe)
 
 	// 只保留最近的10笔交易用于显示

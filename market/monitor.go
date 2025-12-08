@@ -204,6 +204,7 @@ func (m *WSMonitor) subscribeSymbol(symbol, st string) []string {
 
 	return streams
 }
+
 func (m *WSMonitor) subscribeAll() error {
 	// 检查 WebSocket 是否可用
 	m.mu.RLock()

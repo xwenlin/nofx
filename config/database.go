@@ -50,6 +50,12 @@ type DatabaseInterface interface {
 	ValidateBetaCode(code string) (bool, error)
 	UseBetaCode(code, userEmail string) error
 	GetBetaCodeStats() (total, used int, err error)
+	// 交易记录相关方法
+	CreateTrade(trade *TradeRecord) error
+	UpdateTradeClose(traderID, symbol, side string, closeTime time.Time, closePrice, pnl, pnlPct float64, closeReason string, orderIDClose int64, wasStopLoss bool) error
+	GetOpenTrades(traderID string) ([]*TradeRecord, error)
+	GetTradesByTrader(traderID string, limit int) ([]*TradeRecord, error)
+	GetTradesBySymbol(traderID, symbol string, limit int) ([]*TradeRecord, error)
 	Close() error
 }
 
@@ -208,6 +214,29 @@ func (d *Database) createTables() error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 
+		// 交易记录表
+		`CREATE TABLE IF NOT EXISTS trades (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			trader_id TEXT NOT NULL,
+			symbol TEXT NOT NULL,
+			side TEXT NOT NULL,
+			open_time DATETIME NOT NULL,
+			close_time DATETIME,
+			open_price REAL NOT NULL,
+			close_price REAL,
+			quantity REAL NOT NULL,
+			leverage INTEGER NOT NULL,
+			pnl REAL,
+			pnl_pct REAL,
+			close_reason TEXT,
+			order_id_open INTEGER,
+			order_id_close INTEGER,
+			was_stop_loss BOOLEAN DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (trader_id) REFERENCES traders(id) ON DELETE CASCADE
+		)`,
+
 		// 触发器：自动更新 updated_at
 		`CREATE TRIGGER IF NOT EXISTS update_users_updated_at
 			AFTER UPDATE ON users
@@ -243,6 +272,12 @@ func (d *Database) createTables() error {
 			AFTER UPDATE ON system_config
 			BEGIN
 				UPDATE system_config SET updated_at = CURRENT_TIMESTAMP WHERE key = NEW.key;
+			END`,
+
+		`CREATE TRIGGER IF NOT EXISTS update_trades_updated_at
+			AFTER UPDATE ON trades
+			BEGIN
+				UPDATE trades SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 			END`,
 	}
 
@@ -512,6 +547,28 @@ type UserSignalSource struct {
 	OITopURL    string    `json:"oi_top_url"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// TradeRecord 交易记录
+type TradeRecord struct {
+	ID           int64     `json:"id"`
+	TraderID     string    `json:"trader_id"`
+	Symbol       string    `json:"symbol"`
+	Side         string    `json:"side"` // "long" or "short"
+	OpenTime     time.Time `json:"open_time"`
+	CloseTime    time.Time `json:"close_time"`
+	OpenPrice    float64   `json:"open_price"`
+	ClosePrice   float64   `json:"close_price"`
+	Quantity     float64   `json:"quantity"`
+	Leverage     int       `json:"leverage"`
+	PnL          float64   `json:"pnl"`
+	PnLPct       float64   `json:"pnl_pct"`
+	CloseReason  string    `json:"close_reason"` // "manual", "stop_loss", "take_profit", "emergency"
+	OrderIDOpen  int64     `json:"order_id_open"`
+	OrderIDClose int64     `json:"order_id_close"`
+	WasStopLoss  bool      `json:"was_stop_loss"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // GenerateOTPSecret 生成OTP密钥
@@ -1395,4 +1452,251 @@ func (d *Database) decryptSensitiveData(encrypted string) string {
 	}
 
 	return decrypted
+}
+
+// CreateTrade 创建交易记录（开仓）
+func (d *Database) CreateTrade(trade *TradeRecord) error {
+	result, err := d.db.Exec(`
+		INSERT INTO trades (trader_id, symbol, side, open_time, open_price, quantity, leverage, order_id_open)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, trade.TraderID, trade.Symbol, trade.Side, trade.OpenTime, trade.OpenPrice, trade.Quantity, trade.Leverage, trade.OrderIDOpen)
+	if err != nil {
+		return fmt.Errorf("创建交易记录失败: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("获取交易记录ID失败: %w", err)
+	}
+	trade.ID = id
+	return nil
+}
+
+// UpdateTradeClose 更新交易记录（平仓）
+func (d *Database) UpdateTradeClose(traderID, symbol, side string, closeTime time.Time, closePrice, pnl, pnlPct float64, closeReason string, orderIDClose int64, wasStopLoss bool) error {
+	// SQLite 不支持在 UPDATE 中使用 ORDER BY 和 LIMIT，使用子查询
+	result, err := d.db.Exec(`
+		UPDATE trades 
+		SET close_time = ?, close_price = ?, pnl = ?, pnl_pct = ?, close_reason = ?, order_id_close = ?, was_stop_loss = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = (
+			SELECT id FROM trades 
+			WHERE trader_id = ? AND symbol = ? AND side = ? AND close_time IS NULL
+			ORDER BY open_time DESC
+			LIMIT 1
+		)
+	`, closeTime, closePrice, pnl, pnlPct, closeReason, orderIDClose, wasStopLoss, traderID, symbol, side)
+	if err != nil {
+		return fmt.Errorf("更新交易记录失败: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("获取影响行数失败: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("未找到未平仓的交易记录: trader_id=%s, symbol=%s, side=%s", traderID, symbol, side)
+	}
+
+	return nil
+}
+
+// GetOpenTrades 获取未平仓的交易记录
+func (d *Database) GetOpenTrades(traderID string) ([]*TradeRecord, error) {
+	rows, err := d.db.Query(`
+		SELECT id, trader_id, symbol, side, open_time, close_time, open_price, close_price, 
+		       quantity, leverage, pnl, pnl_pct, close_reason, order_id_open, order_id_close, 
+		       was_stop_loss, created_at, updated_at
+		FROM trades
+		WHERE trader_id = ? AND close_time IS NULL
+		ORDER BY open_time DESC
+	`, traderID)
+	if err != nil {
+		return nil, fmt.Errorf("查询未平仓交易失败: %w", err)
+	}
+	defer rows.Close()
+
+	var trades []*TradeRecord
+	for rows.Next() {
+		var trade TradeRecord
+		var closeTime sql.NullTime
+		var closePrice, pnl, pnlPct sql.NullFloat64
+		var closeReason sql.NullString
+		var orderIDClose sql.NullInt64
+		var wasStopLoss sql.NullBool
+
+		err := rows.Scan(
+			&trade.ID, &trade.TraderID, &trade.Symbol, &trade.Side,
+			&trade.OpenTime, &closeTime, &trade.OpenPrice, &closePrice,
+			&trade.Quantity, &trade.Leverage, &pnl, &pnlPct,
+			&closeReason, &trade.OrderIDOpen, &orderIDClose, &wasStopLoss,
+			&trade.CreatedAt, &trade.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("扫描交易记录失败: %w", err)
+		}
+
+		// closeTime 为 NULL 表示未平仓，不需要设置
+		if closeTime.Valid {
+			trade.CloseTime = closeTime.Time
+		}
+		if closePrice.Valid {
+			trade.ClosePrice = closePrice.Float64
+		}
+		if pnl.Valid {
+			trade.PnL = pnl.Float64
+		}
+		if pnlPct.Valid {
+			trade.PnLPct = pnlPct.Float64
+		}
+		if closeReason.Valid {
+			trade.CloseReason = closeReason.String
+		}
+		if orderIDClose.Valid {
+			trade.OrderIDClose = orderIDClose.Int64
+		}
+		if wasStopLoss.Valid {
+			trade.WasStopLoss = wasStopLoss.Bool
+		}
+
+		trades = append(trades, &trade)
+	}
+
+	return trades, nil
+}
+
+// GetTradesByTrader 获取交易员的所有交易记录（按时间倒序）
+func (d *Database) GetTradesByTrader(traderID string, limit int) ([]*TradeRecord, error) {
+	query := `
+		SELECT id, trader_id, symbol, side, open_time, close_time, open_price, close_price, 
+		       quantity, leverage, pnl, pnl_pct, close_reason, order_id_open, order_id_close, 
+		       was_stop_loss, created_at, updated_at
+		FROM trades
+		WHERE trader_id = ? AND close_time IS NOT NULL
+		ORDER BY close_time DESC
+	`
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	rows, err := d.db.Query(query, traderID)
+	if err != nil {
+		return nil, fmt.Errorf("查询交易记录失败: %w", err)
+	}
+	defer rows.Close()
+
+	var trades []*TradeRecord
+	for rows.Next() {
+		var trade TradeRecord
+		var closeTime sql.NullTime
+		var closePrice, pnl, pnlPct sql.NullFloat64
+		var closeReason sql.NullString
+		var orderIDClose sql.NullInt64
+		var wasStopLoss sql.NullBool
+
+		err := rows.Scan(
+			&trade.ID, &trade.TraderID, &trade.Symbol, &trade.Side,
+			&trade.OpenTime, &closeTime, &trade.OpenPrice, &closePrice,
+			&trade.Quantity, &trade.Leverage, &pnl, &pnlPct,
+			&closeReason, &trade.OrderIDOpen, &orderIDClose, &wasStopLoss,
+			&trade.CreatedAt, &trade.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("扫描交易记录失败: %w", err)
+		}
+
+		if closeTime.Valid {
+			trade.CloseTime = closeTime.Time
+		}
+		if closePrice.Valid {
+			trade.ClosePrice = closePrice.Float64
+		}
+		if pnl.Valid {
+			trade.PnL = pnl.Float64
+		}
+		if pnlPct.Valid {
+			trade.PnLPct = pnlPct.Float64
+		}
+		if closeReason.Valid {
+			trade.CloseReason = closeReason.String
+		}
+		if orderIDClose.Valid {
+			trade.OrderIDClose = orderIDClose.Int64
+		}
+		if wasStopLoss.Valid {
+			trade.WasStopLoss = wasStopLoss.Bool
+		}
+
+		trades = append(trades, &trade)
+	}
+
+	return trades, nil
+}
+
+// GetTradesBySymbol 获取指定币种的交易记录
+func (d *Database) GetTradesBySymbol(traderID, symbol string, limit int) ([]*TradeRecord, error) {
+	query := `
+		SELECT id, trader_id, symbol, side, open_time, close_time, open_price, close_price, 
+		       quantity, leverage, pnl, pnl_pct, close_reason, order_id_open, order_id_close, 
+		       was_stop_loss, created_at, updated_at
+		FROM trades
+		WHERE trader_id = ? AND symbol = ? AND close_time IS NOT NULL
+		ORDER BY close_time DESC
+	`
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	rows, err := d.db.Query(query, traderID, symbol)
+	if err != nil {
+		return nil, fmt.Errorf("查询交易记录失败: %w", err)
+	}
+	defer rows.Close()
+
+	var trades []*TradeRecord
+	for rows.Next() {
+		var trade TradeRecord
+		var closeTime sql.NullTime
+		var closePrice, pnl, pnlPct sql.NullFloat64
+		var closeReason sql.NullString
+		var orderIDClose sql.NullInt64
+		var wasStopLoss sql.NullBool
+
+		err := rows.Scan(
+			&trade.ID, &trade.TraderID, &trade.Symbol, &trade.Side,
+			&trade.OpenTime, &closeTime, &trade.OpenPrice, &closePrice,
+			&trade.Quantity, &trade.Leverage, &pnl, &pnlPct,
+			&closeReason, &trade.OrderIDOpen, &orderIDClose, &wasStopLoss,
+			&trade.CreatedAt, &trade.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("扫描交易记录失败: %w", err)
+		}
+
+		if closeTime.Valid {
+			trade.CloseTime = closeTime.Time
+		}
+		if closePrice.Valid {
+			trade.ClosePrice = closePrice.Float64
+		}
+		if pnl.Valid {
+			trade.PnL = pnl.Float64
+		}
+		if pnlPct.Valid {
+			trade.PnLPct = pnlPct.Float64
+		}
+		if closeReason.Valid {
+			trade.CloseReason = closeReason.String
+		}
+		if orderIDClose.Valid {
+			trade.OrderIDClose = orderIDClose.Int64
+		}
+		if wasStopLoss.Valid {
+			trade.WasStopLoss = wasStopLoss.Bool
+		}
+
+		trades = append(trades, &trade)
+	}
+
+	return trades, nil
 }

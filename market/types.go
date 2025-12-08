@@ -28,11 +28,15 @@ type OIData struct {
 
 // IntradayData 日内数据(3分钟/15分钟/1小时间隔)
 type IntradayData struct {
-	MidPrices      []float64
+	ClosePrices    []float64 // 收盘价序列
 	EMA20Values    []float64
 	MACDValues     []float64
 	RSI7Values     []float64
 	RSI14Values    []float64
+	CCI20Values    []float64 // CCI(20)序列
+	BBUpperValues  []float64 // 布林带上轨序列
+	BBMiddleValues []float64 // 布林带中轨序列(EMA20)
+	BBLowerValues  []float64 // 布林带下轨序列
 	Volumes        []float64 // 成交量序列
 	TakerBuyRatios []float64 // 主动买入比率序列（TakerBuyBaseVolume / Volume）
 	BuySellRatios  []float64 // 买卖压力比序列（买入量 / 卖出量 = TakerBuyBaseVolume / (Volume - TakerBuyBaseVolume)）
@@ -47,11 +51,15 @@ type LongerTermData struct {
 	ATR14          float64
 	CurrentVolume  float64   // 当前成交量（保留，用于兼容）
 	AverageVolume  float64   // 平均成交量（保留，用于兼容）
-	MidPrices      []float64 // 4小时价格序列
+	ClosePrices    []float64 // 4小时收盘价序列
 	EMA20Values    []float64 // EMA20序列（新增）
 	MACDValues     []float64
 	RSI7Values     []float64 // RSI7序列（提示词要求）
 	RSI14Values    []float64
+	CCI20Values    []float64 // CCI(20)序列
+	BBUpperValues  []float64 // 布林带上轨序列
+	BBMiddleValues []float64 // 布林带中轨序列(EMA20)
+	BBLowerValues  []float64 // 布林带下轨序列
 	Volumes        []float64 // 成交量序列（新增）
 	TakerBuyRatios []float64 // 主动买入比率序列（TakerBuyBaseVolume / Volume）
 	BuySellRatios  []float64 // 买卖压力比序列（买入量 / 卖出量 = TakerBuyBaseVolume / (Volume - TakerBuyBaseVolume)）

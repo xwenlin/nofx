@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"nofx/config"
 	"nofx/decision"
 	"nofx/logger"
 	"nofx/market"
@@ -80,39 +81,40 @@ type AutoTraderConfig struct {
 
 // AutoTrader 自动交易器
 type AutoTrader struct {
-	id                    string // Trader唯一标识
-	name                  string // Trader显示名称
-	aiModel               string // AI模型名称
-	exchange              string // 交易平台名称
-	config                AutoTraderConfig
-	trader                Trader // 使用Trader接口（支持多平台）
-	mcpClient             *mcp.Client
-	decisionLogger        *logger.DecisionLogger // 决策日志记录器
-	initialBalance        float64
-	dailyPnL              float64
-	customPrompt          string   // 自定义交易策略prompt
-	overrideBasePrompt    bool     // 是否覆盖基础prompt
-	systemPromptTemplate  string   // 系统提示词模板名称
-	defaultCoins          []string // 默认币种列表（从数据库获取）
-	tradingCoins          []string // 实际交易币种列表
-	lastResetTime         time.Time
-	stopUntil             time.Time
-	isRunning             bool
-	startTime             time.Time          // 系统启动时间
-	callCount             int                // AI调用次数
-	positionFirstSeenTime map[string]int64   // 持仓首次出现时间 (symbol_side -> timestamp毫秒)
-	stopMonitorCh         chan struct{}      // 用于停止监控goroutine
-	monitorWg             sync.WaitGroup     // 用于等待监控goroutine结束
-	peakPnLCache          map[string]float64 // 最高收益缓存 (symbol -> 峰值盈亏百分比)
-	peakPnLCacheMutex     sync.RWMutex       // 缓存读写锁
-	lastBalanceSyncTime   time.Time          // 上次余额同步时间
-	database              interface{}        // 数据库引用（用于自动更新余额）
-	userID                string             // 用户ID
-	cycleMutex            sync.Mutex         // 防止周期并发执行的互斥锁
-	cycleRunning          bool               // 周期是否正在执行中
-	processedKlines       sync.Map           // 防抖缓存：已处理的K线OpenTime (symbol -> map[int64]bool)
-	lastEventTriggerTime  time.Time          // 上次事件触发时间（用于防抖）
-	eventTriggerMutex     sync.Mutex         // 保护事件触发相关字段
+	id                     string // Trader唯一标识
+	name                   string // Trader显示名称
+	aiModel                string // AI模型名称
+	exchange               string // 交易平台名称
+	config                 AutoTraderConfig
+	trader                 Trader // 使用Trader接口（支持多平台）
+	mcpClient              *mcp.Client
+	decisionLogger         *logger.DecisionLogger // 决策日志记录器
+	initialBalance         float64
+	dailyPnL               float64
+	customPrompt           string   // 自定义交易策略prompt
+	overrideBasePrompt     bool     // 是否覆盖基础prompt
+	systemPromptTemplate   string   // 系统提示词模板名称
+	defaultCoins           []string // 默认币种列表（从数据库获取）
+	tradingCoins           []string // 实际交易币种列表
+	lastResetTime          time.Time
+	stopUntil              time.Time
+	isRunning              bool
+	startTime              time.Time                   // 系统启动时间
+	callCount              int                         // AI调用次数
+	positionFirstSeenTime  map[string]int64            // 持仓首次出现时间 (symbol_side -> timestamp毫秒)
+	stopMonitorCh          chan struct{}               // 用于停止监控goroutine
+	monitorWg              sync.WaitGroup              // 用于等待监控goroutine结束
+	lastValidationFeedback *decision.ExecutionFeedback // 上轮校验失败结果
+	peakPnLCache           map[string]float64          // 最高收益缓存 (symbol -> 峰值盈亏百分比)
+	peakPnLCacheMutex      sync.RWMutex                // 缓存读写锁
+	lastBalanceSyncTime    time.Time                   // 上次余额同步时间
+	database               interface{}                 // 数据库引用（用于自动更新余额）
+	userID                 string                      // 用户ID
+	cycleMutex             sync.Mutex                  // 防止周期并发执行的互斥锁
+	cycleRunning           bool                        // 周期是否正在执行中
+	processedKlines        sync.Map                    // 防抖缓存：已处理的K线OpenTime (symbol -> map[int64]bool)
+	lastEventTriggerTime   time.Time                   // 上次事件触发时间（用于防抖）
+	eventTriggerMutex      sync.Mutex                  // 保护事件触发相关字段
 }
 
 // NewAutoTrader 创建自动交易器
@@ -410,6 +412,13 @@ func (at *AutoTrader) runCycle() error {
 	log.Printf("⏰ %s - AI决策周期 #%d", cycleStartTime.Format("2006-01-02 15:04:05"), at.callCount)
 	log.Printf("%s", separator)
 
+	// 保存上轮校验失败结果（用于构建上下文），然后清空当前反馈
+	lastFeedback := at.lastValidationFeedback
+	at.lastValidationFeedback = &decision.ExecutionFeedback{
+		HasRejected:       false,
+		RejectedDecisions: []decision.RejectedDecision{},
+	}
+
 	// 创建决策记录
 	record := &logger.DecisionRecord{
 		ExecutionLog: []string{},
@@ -433,8 +442,8 @@ func (at *AutoTrader) runCycle() error {
 		log.Println("📅 日盈亏已重置")
 	}
 
-	// 4. 收集交易上下文
-	ctx, err := at.buildTradingContext()
+	// 4. 收集交易上下文（使用上轮保存的反馈）
+	ctx, err := at.buildTradingContextWithFeedback(lastFeedback)
 	if err != nil {
 		record.Success = false
 		record.ErrorMessage = fmt.Sprintf("构建交易上下文失败: %v", err)
@@ -586,6 +595,38 @@ func (at *AutoTrader) runCycle() error {
 			Reasoning: d.Reasoning, // 保存AI的决策原因
 		}
 
+		// 在执行前校验AI指令是否符合系统执行限制
+		currentPositions, err := at.trader.GetPositions()
+		if err == nil {
+			if validationErr := at.validateDecision(&d, currentPositions); validationErr != nil {
+				log.Printf("❌ 决策校验失败 (%s %s): %v", d.Symbol, d.Action, validationErr)
+				actionRecord.Error = validationErr.Error()
+				record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("❌ %s %s 校验失败: %v", d.Symbol, d.Action, validationErr))
+				record.Decisions = append(record.Decisions, actionRecord)
+
+				// 保存校验失败结果，供下一轮使用
+				at.lastValidationFeedback.HasRejected = true
+				// 通过 ExecutionFeedback 的 RejectedDecisions 字段类型来创建
+				rejected := struct {
+					Symbol   string
+					Action   string
+					Leverage int
+					Reason   string
+				}{
+					Symbol:   d.Symbol,
+					Action:   d.Action,
+					Leverage: d.Leverage,
+					Reason:   validationErr.Error(),
+				}
+				// 使用类型断言转换
+				at.lastValidationFeedback.RejectedDecisions = append(at.lastValidationFeedback.RejectedDecisions, rejected)
+
+				continue // 跳过执行，继续下一个决策
+			}
+		} else {
+			log.Printf("⚠️ 获取持仓信息失败，跳过校验: %v", err)
+		}
+
 		if err := at.executeDecisionWithRecord(&d, &actionRecord); err != nil {
 			log.Printf("❌ 执行决策失败 (%s %s): %v", d.Symbol, d.Action, err)
 			actionRecord.Error = err.Error()
@@ -600,12 +641,100 @@ func (at *AutoTrader) runCycle() error {
 		record.Decisions = append(record.Decisions, actionRecord)
 	}
 
-	// 9. 保存决策记录
+	// 9. 检测自动平仓（止盈/止损触发）
+	at.detectAutoClosures()
+
+	// 10. 保存决策记录
 	if err := at.decisionLogger.LogDecision(record); err != nil {
 		log.Printf("⚠ 保存决策记录失败: %v", err)
 	}
 
 	return nil
+}
+
+// detectAutoClosures 检测自动平仓（止盈/止损触发）
+func (at *AutoTrader) detectAutoClosures() {
+	if at.database == nil {
+		return
+	}
+
+	db, ok := at.database.(interface {
+		GetOpenTrades(traderID string) ([]*config.TradeRecord, error)
+		UpdateTradeClose(traderID, symbol, side string, closeTime time.Time, closePrice, pnl, pnlPct float64, closeReason string, orderIDClose int64, wasStopLoss bool) error
+	})
+	if !ok {
+		return
+	}
+
+	// 获取数据库中的未平仓交易
+	openTrades, err := db.GetOpenTrades(at.id)
+	if err != nil {
+		log.Printf("⚠️ 获取未平仓交易失败: %v", err)
+		return
+	}
+
+	// 获取当前实际持仓
+	currentPositions, err := at.trader.GetPositions()
+	if err != nil {
+		log.Printf("⚠️ 获取当前持仓失败: %v", err)
+		return
+	}
+
+	// 构建当前持仓的 key 集合 (symbol_side)
+	currentPositionKeys := make(map[string]bool)
+	for _, pos := range currentPositions {
+		symbol := pos["symbol"].(string)
+		side := pos["side"].(string)
+		quantity, _ := pos["positionAmt"].(float64)
+		if quantity != 0 {
+			key := symbol + "_" + side
+			currentPositionKeys[key] = true
+		}
+	}
+
+	// 检查数据库中的未平仓交易是否还在持仓中
+	for _, trade := range openTrades {
+		key := trade.Symbol + "_" + trade.Side
+		if !currentPositionKeys[key] {
+			// 持仓已消失，说明被自动平仓了
+			log.Printf("🔍 检测到自动平仓: %s %s (开仓时间: %s)", trade.Symbol, trade.Side, trade.OpenTime.Format("2006-01-02 15:04:05"))
+
+			// 获取当前价格计算盈亏
+			marketData, err := market.Get(trade.Symbol)
+			if err != nil {
+				log.Printf("⚠️ 获取市场价格失败: %v", err)
+				continue
+			}
+
+			// 计算盈亏
+			var pnl, pnlPct float64
+			if trade.Side == "long" {
+				pnl = (marketData.CurrentPrice - trade.OpenPrice) * trade.Quantity
+			} else {
+				pnl = (trade.OpenPrice - marketData.CurrentPrice) * trade.Quantity
+			}
+			marginUsed := (trade.Quantity * trade.OpenPrice) / float64(trade.Leverage)
+			if marginUsed > 0 {
+				pnlPct = (pnl / marginUsed) * 100
+			}
+
+			// 判断是止损还是止盈（根据盈亏判断）
+			closeReason := "take_profit"
+			wasStopLoss := false
+			if pnl < 0 {
+				closeReason = "stop_loss"
+				wasStopLoss = true
+			}
+
+			// 更新数据库记录
+			if err := db.UpdateTradeClose(at.id, trade.Symbol, trade.Side, time.Now(), marketData.CurrentPrice, pnl, pnlPct, closeReason, 0, wasStopLoss); err != nil {
+				log.Printf("⚠️ 更新自动平仓记录失败: %v", err)
+			} else {
+				log.Printf("✓ 自动平仓记录已更新: %s %s | %s | PnL: %.2f USDT (%.2f%%)",
+					trade.Symbol, trade.Side, closeReason, pnl, pnlPct)
+			}
+		}
+	}
 }
 
 // buildTradingContext 构建交易上下文
@@ -733,7 +862,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 	// 5. 分析历史表现（最近1000个周期，避免长期持仓的交易记录丢失）
 	// 假设每3分钟一个周期，1000个周期 = 50小时，足够覆盖大部分交易
 	// 即使开仓记录在窗口外，也会从更早的历史记录中查找匹配
-	performance, err := at.decisionLogger.AnalyzePerformance(1000)
+	performance, err := at.decisionLogger.AnalyzePerformance(1000, at.database, at.id)
 	if err != nil {
 		log.Printf("⚠️  分析历史表现失败: %v", err)
 		// 不影响主流程，继续执行（但设置performance为nil以避免传递错误数据）
@@ -762,7 +891,120 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		Performance:    performance, // 添加历史表现分析
 	}
 
+	// 设置上轮校验失败反馈（如果没有传入，使用空的反馈）
+	ctx.LastExecutionFeedback = &decision.ExecutionFeedback{
+		HasRejected:       false,
+		RejectedDecisions: []decision.RejectedDecision{},
+	}
+
 	return ctx, nil
+}
+
+// buildTradingContextWithFeedback 构建交易上下文（使用指定的反馈信息）
+func (at *AutoTrader) buildTradingContextWithFeedback(lastFeedback *decision.ExecutionFeedback) (*decision.Context, error) {
+	ctx, err := at.buildTradingContext()
+	if err != nil {
+		return nil, err
+	}
+
+	// 设置上轮校验失败反馈
+	if lastFeedback != nil {
+		ctx.LastExecutionFeedback = lastFeedback
+	}
+
+	return ctx, nil
+}
+
+// isBTCETH 判断币种是否为BTC或ETH
+func isBTCETH(symbol string) bool {
+	symbol = strings.ToUpper(symbol)
+	return symbol == "BTCUSDT" || symbol == "ETHUSDT"
+}
+
+// validateDecision 校验AI指令是否符合系统执行限制
+func (at *AutoTrader) validateDecision(d *decision.Decision, currentPositions []map[string]interface{}) error {
+	// 只对开仓操作进行校验
+	if d.Action != "open_long" && d.Action != "open_short" {
+		return nil
+	}
+
+	// 1. 检查最大持仓币种数（3个）
+	// 统计当前持仓的币种数量（不包含当前要开的币种）
+	positionSymbols := make(map[string]bool)
+	for _, pos := range currentPositions {
+		if symbol, ok := pos["symbol"].(string); ok {
+			if symbol != d.Symbol {
+				positionSymbols[symbol] = true
+			}
+		}
+	}
+
+	// 如果当前要开的币种不在持仓中，检查是否会超过3个
+	if !positionSymbols[d.Symbol] {
+		if len(positionSymbols) >= 3 {
+			return fmt.Errorf("❌ 违反规则：最大持仓币种数为3，当前已有%d个币种持仓，无法开新仓", len(positionSymbols))
+		}
+	}
+
+	// 2. 检查单币种最大杠杆
+	maxLeverage := at.config.AltcoinLeverage
+	if isBTCETH(d.Symbol) {
+		maxLeverage = at.config.BTCETHLeverage
+	}
+
+	if d.Leverage > maxLeverage {
+		coinType := "山寨币"
+		if isBTCETH(d.Symbol) {
+			coinType = "BTC/ETH"
+		}
+		return fmt.Errorf("❌ 违反规则：%s最大杠杆为%dx，AI指令要求%dx", coinType, maxLeverage, d.Leverage)
+	}
+
+	// 3. 检查最小开仓名义价值（10 USDT）
+	if d.PositionSizeUSD < 10.0 {
+		return fmt.Errorf("❌ 违反规则：最小开仓名义价值为10 USDT，AI指令要求%.2f USDT", d.PositionSizeUSD)
+	}
+
+	// 4. 检查账户最大保证金使用率（90%）
+	// 获取当前账户信息
+	balance, err := at.trader.GetBalance()
+	if err != nil {
+		// 如果获取余额失败，记录警告但不阻止执行（让后续的保证金检查处理）
+		log.Printf("⚠️ 校验时获取账户余额失败: %v，跳过保证金使用率检查", err)
+	} else {
+		totalEquity := 0.0
+		marginUsed := 0.0
+
+		if equity, ok := balance["totalEquity"].(float64); ok {
+			totalEquity = equity
+		} else if equity, ok := balance["totalEquity"].(string); ok {
+			if parsed, err := strconv.ParseFloat(equity, 64); err == nil {
+				totalEquity = parsed
+			}
+		}
+
+		if margin, ok := balance["marginUsed"].(float64); ok {
+			marginUsed = margin
+		} else if margin, ok := balance["marginUsed"].(string); ok {
+			if parsed, err := strconv.ParseFloat(margin, 64); err == nil {
+				marginUsed = parsed
+			}
+		}
+
+		// 计算新开仓需要的保证金
+		requiredMargin := d.PositionSizeUSD / float64(d.Leverage)
+		newMarginUsed := marginUsed + requiredMargin
+
+		// 检查是否超过90%
+		if totalEquity > 0 {
+			marginUsedPct := (newMarginUsed / totalEquity) * 100
+			if marginUsedPct > 90.0 {
+				return fmt.Errorf("❌ 违反规则：账户最大保证金使用率为90%%，开仓后预计使用率%.2f%%", marginUsedPct)
+			}
+		}
+	}
+
+	return nil
 }
 
 // executeDecisionWithRecord 执行AI决策并记录详细信息
@@ -794,12 +1036,14 @@ func (at *AutoTrader) executeDecisionWithRecord(decision *decision.Decision, act
 func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, actionRecord *logger.DecisionAction) error {
 	log.Printf("  📈 开多仓: %s", decision.Symbol)
 
-	// ⚠️ 关键：检查是否已有同币种同方向持仓，如果有则拒绝开仓（防止仓位叠加超限）
+	// ⚠️ 关键：检查是否已有同币种持仓（单一币种，单一持仓规则）
+	// 无论方向如何，只要该币种有持仓，就不允许开新仓
 	positions, err := at.trader.GetPositions()
 	if err == nil {
 		for _, pos := range positions {
-			if pos["symbol"] == decision.Symbol && pos["side"] == "long" {
-				return fmt.Errorf("❌ %s 已有多仓，拒绝开仓以防止仓位叠加超限。如需换仓，请先给出 close_long 决策", decision.Symbol)
+			if pos["symbol"] == decision.Symbol {
+				side := pos["side"].(string)
+				return fmt.Errorf("❌ %s 已有%s持仓，禁止开新仓（单一币种，单一持仓规则）。如需换仓，请先给出 close_%s 决策", decision.Symbol, side, side)
 			}
 		}
 	}
@@ -867,6 +1111,31 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 		log.Printf("  ⚠ 设置止盈失败: %v", err)
 	}
 
+	// 记录到数据库
+	if db, ok := at.database.(interface {
+		CreateTrade(trade *config.TradeRecord) error
+	}); ok {
+		orderID := int64(0)
+		if id, ok := order["orderId"].(int64); ok {
+			orderID = id
+		}
+		trade := &config.TradeRecord{
+			TraderID:    at.id,
+			Symbol:      decision.Symbol,
+			Side:        "long",
+			OpenTime:    time.Now(),
+			OpenPrice:   marketData.CurrentPrice,
+			Quantity:    quantity,
+			Leverage:    decision.Leverage,
+			OrderIDOpen: orderID,
+		}
+		if err := db.CreateTrade(trade); err != nil {
+			log.Printf("  ⚠️ 记录交易到数据库失败: %v", err)
+		} else {
+			log.Printf("  ✓ 交易记录已保存到数据库 (ID: %d)", trade.ID)
+		}
+	}
+
 	return nil
 }
 
@@ -874,12 +1143,14 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, actionRecord *logger.DecisionAction) error {
 	log.Printf("  📉 开空仓: %s", decision.Symbol)
 
-	// ⚠️ 关键：检查是否已有同币种同方向持仓，如果有则拒绝开仓（防止仓位叠加超限）
+	// ⚠️ 关键：检查是否已有同币种持仓（单一币种，单一持仓规则）
+	// 无论方向如何，只要该币种有持仓，就不允许开新仓
 	positions, err := at.trader.GetPositions()
 	if err == nil {
 		for _, pos := range positions {
-			if pos["symbol"] == decision.Symbol && pos["side"] == "short" {
-				return fmt.Errorf("❌ %s 已有空仓，拒绝开仓以防止仓位叠加超限。如需换仓，请先给出 close_short 决策", decision.Symbol)
+			if pos["symbol"] == decision.Symbol {
+				side := pos["side"].(string)
+				return fmt.Errorf("❌ %s 已有%s持仓，禁止开新仓（单一币种，单一持仓规则）。如需换仓，请先给出 close_%s 决策", decision.Symbol, side, side)
 			}
 		}
 	}
@@ -947,6 +1218,31 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 		log.Printf("  ⚠ 设置止盈失败: %v", err)
 	}
 
+	// 记录到数据库
+	if db, ok := at.database.(interface {
+		CreateTrade(trade *config.TradeRecord) error
+	}); ok {
+		orderID := int64(0)
+		if id, ok := order["orderId"].(int64); ok {
+			orderID = id
+		}
+		trade := &config.TradeRecord{
+			TraderID:    at.id,
+			Symbol:      decision.Symbol,
+			Side:        "short",
+			OpenTime:    time.Now(),
+			OpenPrice:   marketData.CurrentPrice,
+			Quantity:    quantity,
+			Leverage:    decision.Leverage,
+			OrderIDOpen: orderID,
+		}
+		if err := db.CreateTrade(trade); err != nil {
+			log.Printf("  ⚠️ 记录交易到数据库失败: %v", err)
+		} else {
+			log.Printf("  ✓ 交易记录已保存到数据库 (ID: %d)", trade.ID)
+		}
+	}
+
 	return nil
 }
 
@@ -968,8 +1264,40 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *decision.Decision, ac
 	}
 
 	// 记录订单ID
+	var orderIDClose int64
 	if orderID, ok := order["orderId"].(int64); ok {
 		actionRecord.OrderID = orderID
+		orderIDClose = orderID
+	}
+
+	// 更新数据库记录
+	if db, ok := at.database.(interface {
+		UpdateTradeClose(traderID, symbol, side string, closeTime time.Time, closePrice, pnl, pnlPct float64, closeReason string, orderIDClose int64, wasStopLoss bool) error
+		GetOpenTrades(traderID string) ([]*config.TradeRecord, error)
+	}); ok {
+		// 获取开仓记录以计算盈亏
+		openTrades, err := db.GetOpenTrades(at.id)
+		if err == nil {
+			for _, trade := range openTrades {
+				if trade.Symbol == decision.Symbol && trade.Side == "long" {
+					// 计算盈亏
+					pnl := (marketData.CurrentPrice - trade.OpenPrice) * trade.Quantity
+					marginUsed := (trade.Quantity * trade.OpenPrice) / float64(trade.Leverage)
+					pnlPct := 0.0
+					if marginUsed > 0 {
+						pnlPct = (pnl / marginUsed) * 100
+					}
+
+					// 更新数据库
+					if err := db.UpdateTradeClose(at.id, decision.Symbol, "long", time.Now(), marketData.CurrentPrice, pnl, pnlPct, "manual", orderIDClose, false); err != nil {
+						log.Printf("  ⚠️ 更新交易记录失败: %v", err)
+					} else {
+						log.Printf("  ✓ 交易记录已更新到数据库 (PnL: %.2f USDT, %.2f%%)", pnl, pnlPct)
+					}
+					break
+				}
+			}
+		}
 	}
 
 	log.Printf("  ✓ 平仓成功")
@@ -994,8 +1322,40 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *decision.Decision, a
 	}
 
 	// 记录订单ID
+	var orderIDClose int64
 	if orderID, ok := order["orderId"].(int64); ok {
 		actionRecord.OrderID = orderID
+		orderIDClose = orderID
+	}
+
+	// 更新数据库记录
+	if db, ok := at.database.(interface {
+		UpdateTradeClose(traderID, symbol, side string, closeTime time.Time, closePrice, pnl, pnlPct float64, closeReason string, orderIDClose int64, wasStopLoss bool) error
+		GetOpenTrades(traderID string) ([]*config.TradeRecord, error)
+	}); ok {
+		// 获取开仓记录以计算盈亏
+		openTrades, err := db.GetOpenTrades(at.id)
+		if err == nil {
+			for _, trade := range openTrades {
+				if trade.Symbol == decision.Symbol && trade.Side == "short" {
+					// 计算盈亏
+					pnl := (trade.OpenPrice - marketData.CurrentPrice) * trade.Quantity
+					marginUsed := (trade.Quantity * trade.OpenPrice) / float64(trade.Leverage)
+					pnlPct := 0.0
+					if marginUsed > 0 {
+						pnlPct = (pnl / marginUsed) * 100
+					}
+
+					// 更新数据库
+					if err := db.UpdateTradeClose(at.id, decision.Symbol, "short", time.Now(), marketData.CurrentPrice, pnl, pnlPct, "manual", orderIDClose, false); err != nil {
+						log.Printf("  ⚠️ 更新交易记录失败: %v", err)
+					} else {
+						log.Printf("  ✓ 交易记录已更新到数据库 (PnL: %.2f USDT, %.2f%%)", pnl, pnlPct)
+					}
+					break
+				}
+			}
+		}
 	}
 
 	log.Printf("  ✓ 平仓成功")
@@ -1356,6 +1716,11 @@ func (at *AutoTrader) executePartialCloseWithRecord(decision *decision.Decision,
 // GetID 获取trader ID
 func (at *AutoTrader) GetID() string {
 	return at.id
+}
+
+// GetDatabase 获取数据库引用
+func (at *AutoTrader) GetDatabase() interface{} {
+	return at.database
 }
 
 // GetName 获取trader名称

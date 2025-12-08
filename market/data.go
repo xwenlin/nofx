@@ -20,9 +20,17 @@ type FundingRateCache struct {
 	UpdatedAt time.Time
 }
 
+// OICacheEntry OI缓存条目
+type OICacheEntry struct {
+	OI        float64
+	Timestamp time.Time
+}
+
 var (
 	fundingRateMap sync.Map // map[string]*FundingRateCache
 	frCacheTTL     = 1 * time.Hour
+	oiCacheMap     sync.Map        // map[string][]*OICacheEntry，每个币种的OI历史记录
+	oiCacheMaxAge  = 2 * time.Hour // OI缓存最大保留时间（保留2小时的数据）
 )
 
 // Get 获取指定代币的市场数据
@@ -35,12 +43,6 @@ func Get(symbol string) (*Data, error) {
 	klines3m, err = WSMonitorCli.GetCurrentKlines(symbol, "3m") // 多获取一些用于计算
 	if err != nil {
 		return nil, fmt.Errorf("获取3分钟K线失败: %v", err)
-	}
-
-	// Data staleness detection: Prevent DOGEUSDT-style price freeze issues
-	if isStaleData(klines3m, symbol) {
-		log.Printf("⚠️  WARNING: %s detected stale data (consecutive price freeze), skipping symbol", symbol)
-		return nil, fmt.Errorf("%s data is stale, possible cache failure", symbol)
 	}
 
 	// Data staleness detection: Prevent DOGEUSDT-style price freeze issues
@@ -75,8 +77,18 @@ func Get(symbol string) (*Data, error) {
 		return nil, fmt.Errorf("4小时K线数据为空")
 	}
 
+	// 获取实时价格
+	// 每根新K线（如3分钟线）结束时，通过WS推送触发一次数据更新和决策。此时“当前价格”与“3m收盘价”基本一致
+	// 如果WS中断，则每3分钟通过API拉取一次数据做决策。此时“当前价格”与各周期“收盘价”可能存在延时差，因此需要使用API获取实时价格
+	apiClient := NewAPIClient()
+	currentPrice, err := apiClient.GetCurrentPrice(symbol)
+	if err != nil {
+		// 如果获取实时价格失败，回退到使用3分钟K线最新收盘价
+		log.Printf("⚠️  获取 %s 实时价格失败，使用K线收盘价: %v", symbol, err)
+		currentPrice = klines3m[len(klines3m)-1].Close
+	}
+
 	// 计算当前指标 (基于3分钟最新数据)
-	currentPrice := klines3m[len(klines3m)-1].Close
 	currentEMA20 := calculateEMA(klines3m, 20)
 	currentMACD := calculateMACD(klines3m)
 	currentRSI7 := calculateRSI(klines3m, 7)
@@ -156,6 +168,7 @@ func calculateEMA(klines []Kline, period int) float64 {
 }
 
 // calculateMACD 计算MACD
+// 当前实现计算的是 MACD 线（DIF）= EMA(12) - EMA(26)，符合提示词中“>0看涨，<0看跌”的定义
 func calculateMACD(klines []Kline) float64 {
 	if len(klines) < 26 {
 		return 0
@@ -247,14 +260,94 @@ func calculateATR(klines []Kline, period int) float64 {
 	return atr
 }
 
+// calculateCCI 计算CCI (Commodity Channel Index)
+// CCI = (Typical Price - SMA of Typical Price) / (0.015 * Mean Deviation)
+// Typical Price = (High + Low + Close) / 3
+func calculateCCI(klines []Kline, period int) float64 {
+	if len(klines) < period {
+		return 0
+	}
+
+	// 计算典型价格
+	typicalPrices := make([]float64, len(klines))
+	for i := 0; i < len(klines); i++ {
+		typicalPrices[i] = (klines[i].High + klines[i].Low + klines[i].Close) / 3.0
+	}
+
+	// 计算SMA
+	sum := 0.0
+	for i := len(typicalPrices) - period; i < len(typicalPrices); i++ {
+		sum += typicalPrices[i]
+	}
+	sma := sum / float64(period)
+
+	// 计算平均偏差
+	meanDeviation := 0.0
+	for i := len(typicalPrices) - period; i < len(typicalPrices); i++ {
+		meanDeviation += math.Abs(typicalPrices[i] - sma)
+	}
+	meanDeviation = meanDeviation / float64(period)
+
+	// 计算CCI
+	if meanDeviation == 0 {
+		return 0
+	}
+	cci := (typicalPrices[len(typicalPrices)-1] - sma) / (0.015 * meanDeviation)
+
+	return cci
+}
+
+// calculateBollingerBands 计算布林带
+// 中轨 = SMA(20) 或 EMA(20)
+// 上轨 = 中轨 + 2 * 标准差
+// 下轨 = 中轨 - 2 * 标准差
+func calculateBollingerBands(klines []Kline, period int, numStdDev float64) (upper, middle, lower float64) {
+	if len(klines) < period {
+		return 0, 0, 0
+	}
+
+	// 使用收盘价计算
+	prices := make([]float64, period)
+	start := len(klines) - period
+	for i := 0; i < period; i++ {
+		prices[i] = klines[start+i].Close
+	}
+
+	// 计算SMA作为中轨
+	sum := 0.0
+	for _, price := range prices {
+		sum += price
+	}
+	middle = sum / float64(period)
+
+	// 计算标准差
+	variance := 0.0
+	for _, price := range prices {
+		diff := price - middle
+		variance += diff * diff
+	}
+	variance = variance / float64(period)
+	stdDev := math.Sqrt(variance)
+
+	// 计算上下轨
+	upper = middle + numStdDev*stdDev
+	lower = middle - numStdDev*stdDev
+
+	return upper, middle, lower
+}
+
 // calculateIntradaySeries 计算日内系列数据
 func calculateIntradaySeries(klines []Kline) *IntradayData {
 	data := &IntradayData{
-		MidPrices:      make([]float64, 0, 10),
+		ClosePrices:    make([]float64, 0, 10),
 		EMA20Values:    make([]float64, 0, 10),
 		MACDValues:     make([]float64, 0, 10),
 		RSI7Values:     make([]float64, 0, 10),
 		RSI14Values:    make([]float64, 0, 10),
+		CCI20Values:    make([]float64, 0, 10),
+		BBUpperValues:  make([]float64, 0, 10),
+		BBMiddleValues: make([]float64, 0, 10),
+		BBLowerValues:  make([]float64, 0, 10),
 		Volumes:        make([]float64, 0, 10),
 		TakerBuyRatios: make([]float64, 0, 10),
 		BuySellRatios:  make([]float64, 0, 10),
@@ -267,7 +360,7 @@ func calculateIntradaySeries(klines []Kline) *IntradayData {
 	}
 
 	for i := start; i < len(klines); i++ {
-		data.MidPrices = append(data.MidPrices, klines[i].Close)
+		data.ClosePrices = append(data.ClosePrices, klines[i].Close)
 
 		// 计算成交量序列
 		data.Volumes = append(data.Volumes, klines[i].Volume)
@@ -313,19 +406,39 @@ func calculateIntradaySeries(klines []Kline) *IntradayData {
 		}
 
 		// 计算每个点的RSI7（需要至少8个数据点）
-		if i+1 >= 8 {
+		if i+1 >= 7 {
 			rsi7 := calculateRSI(klines[:i+1], 7)
 			data.RSI7Values = append(data.RSI7Values, rsi7)
 		} else {
 			data.RSI7Values = append(data.RSI7Values, 0)
 		}
 
-		// 计算每个点的RSI14（需要至少15个数据点）
-		if i+1 >= 15 {
+		// 计算每个点的RSI14（需要至少14个数据点）
+		if i+1 >= 14 {
 			rsi14 := calculateRSI(klines[:i+1], 14)
 			data.RSI14Values = append(data.RSI14Values, rsi14)
 		} else {
 			data.RSI14Values = append(data.RSI14Values, 0)
+		}
+
+		// 计算每个点的CCI(20)（需要至少20个数据点）
+		if i+1 >= 20 {
+			cci20 := calculateCCI(klines[:i+1], 20)
+			data.CCI20Values = append(data.CCI20Values, cci20)
+		} else {
+			data.CCI20Values = append(data.CCI20Values, 0)
+		}
+
+		// 计算每个点的布林带（需要至少20个数据点）
+		if i+1 >= 20 {
+			bbUpper, bbMiddle, bbLower := calculateBollingerBands(klines[:i+1], 20, 2.0)
+			data.BBUpperValues = append(data.BBUpperValues, bbUpper)
+			data.BBMiddleValues = append(data.BBMiddleValues, bbMiddle)
+			data.BBLowerValues = append(data.BBLowerValues, bbLower)
+		} else {
+			data.BBUpperValues = append(data.BBUpperValues, 0)
+			data.BBMiddleValues = append(data.BBMiddleValues, 0)
+			data.BBLowerValues = append(data.BBLowerValues, 0)
 		}
 	}
 
@@ -338,11 +451,15 @@ func calculateIntradaySeries(klines []Kline) *IntradayData {
 // calculateLongerTermData 计算长期数据
 func calculateLongerTermData(klines []Kline) *LongerTermData {
 	data := &LongerTermData{
-		MidPrices:      make([]float64, 0, 10),
+		ClosePrices:    make([]float64, 0, 10),
 		EMA20Values:    make([]float64, 0, 10),
 		MACDValues:     make([]float64, 0, 10),
 		RSI7Values:     make([]float64, 0, 10),
 		RSI14Values:    make([]float64, 0, 10),
+		CCI20Values:    make([]float64, 0, 10),
+		BBUpperValues:  make([]float64, 0, 10),
+		BBMiddleValues: make([]float64, 0, 10),
+		BBLowerValues:  make([]float64, 0, 10),
 		Volumes:        make([]float64, 0, 10),
 		TakerBuyRatios: make([]float64, 0, 10),
 		BuySellRatios:  make([]float64, 0, 10),
@@ -375,7 +492,7 @@ func calculateLongerTermData(klines []Kline) *LongerTermData {
 
 	for i := start; i < len(klines); i++ {
 		// 添加价格序列
-		data.MidPrices = append(data.MidPrices, klines[i].Close)
+		data.ClosePrices = append(data.ClosePrices, klines[i].Close)
 
 		// 计算成交量序列
 		data.Volumes = append(data.Volumes, klines[i].Volume)
@@ -418,20 +535,40 @@ func calculateLongerTermData(klines []Kline) *LongerTermData {
 			data.MACDValues = append(data.MACDValues, 0)
 		}
 
-		// 计算RSI7序列（需要至少8个数据点）
-		if i+1 >= 8 {
+		// 计算RSI7序列（需要至少7个数据点）
+		if i+1 >= 7 {
 			rsi7 := calculateRSI(klines[:i+1], 7)
 			data.RSI7Values = append(data.RSI7Values, rsi7)
 		} else {
 			data.RSI7Values = append(data.RSI7Values, 0)
 		}
 
-		// 计算RSI14序列（需要至少15个数据点）
-		if i+1 >= 15 {
+		// 计算RSI14序列（需要至少14个数据点）
+		if i+1 >= 14 {
 			rsi14 := calculateRSI(klines[:i+1], 14)
 			data.RSI14Values = append(data.RSI14Values, rsi14)
 		} else {
 			data.RSI14Values = append(data.RSI14Values, 0)
+		}
+
+		// 计算每个点的CCI(20)（需要至少20个数据点）
+		if i+1 >= 20 {
+			cci20 := calculateCCI(klines[:i+1], 20)
+			data.CCI20Values = append(data.CCI20Values, cci20)
+		} else {
+			data.CCI20Values = append(data.CCI20Values, 0)
+		}
+
+		// 计算每个点的布林带（需要至少20个数据点）
+		if i+1 >= 20 {
+			bbUpper, bbMiddle, bbLower := calculateBollingerBands(klines[:i+1], 20, 2.0)
+			data.BBUpperValues = append(data.BBUpperValues, bbUpper)
+			data.BBMiddleValues = append(data.BBMiddleValues, bbMiddle)
+			data.BBLowerValues = append(data.BBLowerValues, bbLower)
+		} else {
+			data.BBUpperValues = append(data.BBUpperValues, 0)
+			data.BBMiddleValues = append(data.BBMiddleValues, 0)
+			data.BBLowerValues = append(data.BBLowerValues, 0)
 		}
 	}
 
@@ -457,7 +594,6 @@ func getOpenInterestData(symbol string) (*OIData, error) {
 	var result struct {
 		OpenInterest string `json:"openInterest"`
 		Symbol       string `json:"symbol"`
-		Time         int64  `json:"time"`
 	}
 
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -465,55 +601,84 @@ func getOpenInterestData(symbol string) (*OIData, error) {
 	}
 
 	oiLatest, _ := strconv.ParseFloat(result.OpenInterest, 64)
+	now := time.Now()
 
-	// 尝试获取历史OI数据来计算变化百分比和平均值
-	oiDeltaPercent := 0.0
-	oiAverage := oiLatest // 默认使用当前值作为平均值（如果无法获取历史数据）
+	cleanExpiredOICache(symbol)
 
-	// 获取24小时的历史OI数据（每1小时一个数据点，共24个）
-	histURL := fmt.Sprintf("https://fapi.binance.com/futures/data/openInterestHist?symbol=%s&period=1h&limit=24", symbol)
-	histResp, histErr := http.Get(histURL)
-	if histErr == nil {
-		defer histResp.Body.Close()
-		histBody, _ := io.ReadAll(histResp.Body)
-		var histResult []struct {
-			SumOpenInterest      string `json:"sumOpenInterest"`
-			SumOpenInterestValue string `json:"sumOpenInterestValue"`
-		}
-		if json.Unmarshal(histBody, &histResult) == nil && len(histResult) > 0 {
-			// 计算平均值（使用所有历史数据点）
-			sum := 0.0
-			validCount := 0
-			for _, item := range histResult {
-				if histOI, parseErr := strconv.ParseFloat(item.SumOpenInterest, 64); parseErr == nil && histOI > 0 {
-					sum += histOI
-					validCount++
-				}
-			}
+	// 检查缓存是否为空（清理后可能为空或列表为空）
+	cachedEntries, hasCache := oiCacheMap.Load(symbol)
+	needsInit := false
 
-			if validCount > 0 {
-				oiAverage = sum / float64(validCount)
-
-				// 计算变化百分比（使用最早的历史数据，即24小时前）
-				// 历史数据按时间倒序排列，最后一个是最早的
-				earliestOIStr := histResult[len(histResult)-1].SumOpenInterest
-				if earliestOI, parseErr := strconv.ParseFloat(earliestOIStr, 64); parseErr == nil && earliestOI > 0 {
-					oiDeltaPercent = ((oiLatest - earliestOI) / earliestOI) * 100
-				} else if len(histResult) > 0 {
-					// 如果最后一个解析失败，尝试第一个
-					if firstOI, parseErr := strconv.ParseFloat(histResult[0].SumOpenInterest, 64); parseErr == nil && firstOI > 0 {
-						oiDeltaPercent = ((oiLatest - firstOI) / firstOI) * 100
-					}
-				}
-			}
+	if !hasCache {
+		// 缓存不存在，需要初始化
+		needsInit = true
+	} else {
+		// 检查列表是否为空（清理后所有数据可能都过期了）
+		entries, ok := cachedEntries.([]*OICacheEntry)
+		if !ok || len(entries) == 0 {
+			// 类型断言失败或列表为空，需要初始化
+			needsInit = true
 		}
 	}
 
-	// 如果无法获取历史数据或历史数据无效，使用当前值作为平均值
-	// 但不设置假的DeltaPercent（保持为0），让AI知道这是当前数据，无法判断变化
-	if oiDeltaPercent == 0 && oiAverage == oiLatest {
-		// 这种情况下，我们无法知道真实的变化，DeltaPercent保持为0
-		// 这意味着AI应该忽略OI变化这个指标，或者使用其他指标
+	if needsInit {
+		// 缓存为空或列表为空，从历史接口获取数据（会添加最后一个历史周期的OI）
+		initOICacheFromHistory(symbol)
+	}
+
+	// 添加当前OI到缓存（确保当前值在缓存中）
+	addOIToCache(symbol, oiLatest)
+
+	// 从缓存中计算1小时变化和平均值
+	oiDeltaPercent := 0.0
+	oiAverage := oiLatest
+
+	// 重新加载缓存（因为addOIToCache可能更新了缓存）
+	cachedEntries, _ = oiCacheMap.Load(symbol)
+	if cachedEntries != nil {
+		entries, ok := cachedEntries.([]*OICacheEntry)
+		if !ok {
+			// 类型断言失败，跳过缓存计算
+			return &OIData{
+				Latest:       oiLatest,
+				DeltaPercent: 0.0,
+				Average:      oiLatest,
+			}, nil
+		}
+
+		if len(entries) >= 2 {
+			// 第一个是最旧的，最后一个是当前OI
+			oldestEntry := entries[0]
+			latestEntry := entries[len(entries)-1]
+
+			// 计算1小时变化：查找1小时前最接近的数据点
+			oneHourAgo := now.Add(-1 * time.Hour)
+			var oneHourAgoEntry *OICacheEntry
+			minDiff := time.Duration(0)
+			for _, entry := range entries {
+				diff := oneHourAgo.Sub(entry.Timestamp)
+				if diff >= 0 && diff < 10*time.Minute { // 允许10分钟误差
+					if oneHourAgoEntry == nil || diff < minDiff {
+						oneHourAgoEntry = entry
+						minDiff = diff
+					}
+				}
+			}
+
+			// 如果找到1小时前的数据，使用它计算；否则使用最旧的数据
+			if oneHourAgoEntry != nil && oneHourAgoEntry.OI > 0 {
+				oiDeltaPercent = ((oiLatest - oneHourAgoEntry.OI) / oneHourAgoEntry.OI) * 100
+			} else if oldestEntry.OI > 0 {
+				oiDeltaPercent = ((latestEntry.OI - oldestEntry.OI) / oldestEntry.OI) * 100
+			}
+
+			// 计算平均值
+			sum := 0.0
+			for _, entry := range entries {
+				sum += entry.OI
+			}
+			oiAverage = sum / float64(len(entries))
+		}
 	}
 
 	return &OIData{
@@ -521,6 +686,95 @@ func getOpenInterestData(symbol string) (*OIData, error) {
 		Average:      oiAverage,
 		DeltaPercent: oiDeltaPercent,
 	}, nil
+}
+
+// addOIToCache 将OI值添加到缓存
+func addOIToCache(symbol string, oi float64) {
+	// 获取缓存条目列表
+	value, ok := oiCacheMap.Load(symbol)
+	var entries []*OICacheEntry
+	if !ok {
+		// 缓存为空，创建新列表
+		entries = make([]*OICacheEntry, 0, 10)
+	} else {
+		entries = value.([]*OICacheEntry)
+	}
+	now := time.Now()
+
+	// 添加新条目
+	newEntry := &OICacheEntry{
+		OI:        oi,
+		Timestamp: now,
+	}
+	entries = append(entries, newEntry)
+
+	oiCacheMap.Store(symbol, entries)
+}
+
+// cleanExpiredOICache 清理过期的OI缓存数据（超过2小时的数据）
+func cleanExpiredOICache(symbol string) {
+	// 获取或创建缓存条目列表
+	value, ok := oiCacheMap.Load(symbol)
+	if !ok || value == nil {
+		// 缓存不存在或为nil，无需清理
+		return
+	}
+	entries, ok := value.([]*OICacheEntry)
+	if !ok {
+		// 类型断言失败，可能是缓存损坏，直接返回
+		return
+	}
+	validEntries := make([]*OICacheEntry, 0, len(entries))
+	now := time.Now()
+
+	for _, entry := range entries {
+		if now.Sub(entry.Timestamp) <= oiCacheMaxAge {
+			validEntries = append(validEntries, entry)
+		}
+	}
+	oiCacheMap.Store(symbol, validEntries)
+}
+
+// initOICacheFromHistory 从历史接口初始化OI缓存
+// 只添加最后一个历史周期的OI（1小时前的完整周期结束时的快照）
+func initOICacheFromHistory(symbol string) {
+	// 获取历史OI数据来初始化缓存（只需要2个数据点：倒数第二个和最后一个）
+	histURL := fmt.Sprintf("https://fapi.binance.com/futures/data/openInterestHist?symbol=%s&period=1h&limit=2", symbol)
+	histResp, histErr := http.Get(histURL)
+	if histErr != nil {
+		return
+	}
+	defer histResp.Body.Close()
+
+	histBody, _ := io.ReadAll(histResp.Body)
+	var histResult []struct {
+		SumOpenInterest      string `json:"sumOpenInterest"`
+		SumOpenInterestValue string `json:"sumOpenInterestValue"`
+	}
+
+	if json.Unmarshal(histBody, &histResult) != nil || len(histResult) == 0 {
+		return
+	}
+
+	// 只添加最后一个历史周期的OI（最近一个完整1小时周期结束时的快照）
+	// 数据按升序排列，最后一个元素是最新的历史数据（1小时前的完整周期结束时的快照）
+	entries := make([]*OICacheEntry, 0, 2)
+	lastHistIdx := len(histResult) - 1
+	lastHistOIStr := histResult[lastHistIdx].SumOpenInterest
+	now := time.Now()
+
+	if lastHistOI, parseErr := strconv.ParseFloat(lastHistOIStr, 64); parseErr == nil && lastHistOI > 0 {
+		// 计算时间戳：最近一个完整周期结束时间
+		// 例如：当前时间10:45，最近一个完整周期是9:00-10:00，结束时间是10:00
+		// Truncate到小时得到10:00，这就是最近一个完整周期的结束时间
+		baseTime := now.Truncate(time.Hour)
+		entries = append(entries, &OICacheEntry{
+			OI:        lastHistOI,
+			Timestamp: baseTime,
+		})
+	}
+
+	oiCacheMap.Store(symbol, entries)
 }
 
 // getFundingRate 获取资金费率（优化：使用 1 小时缓存）
@@ -601,8 +855,8 @@ func Format(data *Data) string {
 	if data.IntradaySeries != nil {
 		sb.WriteString("3-minute series (oldest → latest):\n\n")
 
-		if len(data.IntradaySeries.MidPrices) > 0 {
-			sb.WriteString(fmt.Sprintf("Mid prices: %s\n\n", formatFloatSlice(data.IntradaySeries.MidPrices)))
+		if len(data.IntradaySeries.ClosePrices) > 0 {
+			sb.WriteString(fmt.Sprintf("Close prices: %s\n\n", formatFloatSlice(data.IntradaySeries.ClosePrices)))
 		}
 
 		if len(data.IntradaySeries.EMA20Values) > 0 {
@@ -638,8 +892,8 @@ func Format(data *Data) string {
 	if data.Series15m != nil {
 		sb.WriteString("15-minute series (oldest → latest):\n\n")
 
-		if len(data.Series15m.MidPrices) > 0 {
-			sb.WriteString(fmt.Sprintf("Mid prices: %s\n\n", formatFloatSlice(data.Series15m.MidPrices)))
+		if len(data.Series15m.ClosePrices) > 0 {
+			sb.WriteString(fmt.Sprintf("Close prices: %s\n\n", formatFloatSlice(data.Series15m.ClosePrices)))
 		}
 
 		if len(data.Series15m.EMA20Values) > 0 {
@@ -675,8 +929,8 @@ func Format(data *Data) string {
 	if data.Series1h != nil {
 		sb.WriteString("1-hour series (oldest → latest):\n\n")
 
-		if len(data.Series1h.MidPrices) > 0 {
-			sb.WriteString(fmt.Sprintf("Mid prices: %s\n\n", formatFloatSlice(data.Series1h.MidPrices)))
+		if len(data.Series1h.ClosePrices) > 0 {
+			sb.WriteString(fmt.Sprintf("Close prices: %s\n\n", formatFloatSlice(data.Series1h.ClosePrices)))
 		}
 
 		if len(data.Series1h.EMA20Values) > 0 {
@@ -721,8 +975,8 @@ func Format(data *Data) string {
 		sb.WriteString(fmt.Sprintf("Current Volume: %.3f vs. Average Volume: %.3f\n\n",
 			data.LongerTermContext.CurrentVolume, data.LongerTermContext.AverageVolume))
 
-		if len(data.LongerTermContext.MidPrices) > 0 {
-			sb.WriteString(fmt.Sprintf("Mid prices: %s\n\n", formatFloatSlice(data.LongerTermContext.MidPrices)))
+		if len(data.LongerTermContext.ClosePrices) > 0 {
+			sb.WriteString(fmt.Sprintf("Close prices: %s\n\n", formatFloatSlice(data.LongerTermContext.ClosePrices)))
 		}
 
 		if len(data.LongerTermContext.EMA20Values) > 0 {
