@@ -3,7 +3,6 @@ package logger
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"math"
 	"nofx/config"
 	"os"
@@ -114,7 +113,7 @@ func (l *DecisionLogger) LogDecision(record *DecisionRecord) error {
 	}
 
 	// 写入文件（使用安全权限：只有所有者可读写）
-	if err := ioutil.WriteFile(filepath, data, 0600); err != nil {
+	if err := os.WriteFile(filepath, data, 0600); err != nil {
 		return fmt.Errorf("写入决策记录失败: %w", err)
 	}
 
@@ -124,7 +123,7 @@ func (l *DecisionLogger) LogDecision(record *DecisionRecord) error {
 
 // GetLatestRecords 获取最近N条记录（按时间正序：从旧到新）
 func (l *DecisionLogger) GetLatestRecords(n int) ([]*DecisionRecord, error) {
-	files, err := ioutil.ReadDir(l.logDir)
+	files, err := os.ReadDir(l.logDir)
 	if err != nil {
 		return nil, fmt.Errorf("读取日志目录失败: %w", err)
 	}
@@ -139,7 +138,7 @@ func (l *DecisionLogger) GetLatestRecords(n int) ([]*DecisionRecord, error) {
 		}
 
 		filepath := filepath.Join(l.logDir, file.Name())
-		data, err := ioutil.ReadFile(filepath)
+		data, err := os.ReadFile(filepath)
 		if err != nil {
 			continue
 		}
@@ -173,7 +172,7 @@ func (l *DecisionLogger) GetRecordByDate(date time.Time) ([]*DecisionRecord, err
 
 	var records []*DecisionRecord
 	for _, filepath := range files {
-		data, err := ioutil.ReadFile(filepath)
+		data, err := os.ReadFile(filepath)
 		if err != nil {
 			continue
 		}
@@ -193,7 +192,7 @@ func (l *DecisionLogger) GetRecordByDate(date time.Time) ([]*DecisionRecord, err
 func (l *DecisionLogger) CleanOldRecords(days int) error {
 	cutoffTime := time.Now().AddDate(0, 0, -days)
 
-	files, err := ioutil.ReadDir(l.logDir)
+	files, err := os.ReadDir(l.logDir)
 	if err != nil {
 		return fmt.Errorf("读取日志目录失败: %w", err)
 	}
@@ -204,7 +203,12 @@ func (l *DecisionLogger) CleanOldRecords(days int) error {
 			continue
 		}
 
-		if file.ModTime().Before(cutoffTime) {
+		info, err := file.Info()
+		if err != nil {
+			continue
+		}
+
+		if info.ModTime().Before(cutoffTime) {
 			filepath := filepath.Join(l.logDir, file.Name())
 			if err := os.Remove(filepath); err != nil {
 				fmt.Printf("⚠ 删除旧记录失败 %s: %v\n", file.Name(), err)
@@ -223,7 +227,7 @@ func (l *DecisionLogger) CleanOldRecords(days int) error {
 
 // GetStatistics 获取统计信息
 func (l *DecisionLogger) GetStatistics() (*Statistics, error) {
-	files, err := ioutil.ReadDir(l.logDir)
+	files, err := os.ReadDir(l.logDir)
 	if err != nil {
 		return nil, fmt.Errorf("读取日志目录失败: %w", err)
 	}
@@ -236,7 +240,7 @@ func (l *DecisionLogger) GetStatistics() (*Statistics, error) {
 		}
 
 		filepath := filepath.Join(l.logDir, file.Name())
-		data, err := ioutil.ReadFile(filepath)
+		data, err := os.ReadFile(filepath)
 		if err != nil {
 			continue
 		}
