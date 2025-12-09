@@ -518,7 +518,7 @@ func formatMultiTimeframeTable(symbol string, data *market.Data) string {
 	}
 
 	// 4H数据
-	var close4H, ema4H, macd4H, rsi4H, cci4H, bbUpper4H, bbMiddle4H, bbLower4H float64
+	var close4H, ema4H, macd4H, rsi4H, cci4H, bbUpper4H, bbMiddle4H, bbLower4H, takerBuy4H, bsr4H float64
 	if data.LongerTermContext != nil {
 		close4H = getLatest(data.LongerTermContext.ClosePrices)
 		ema4H = getLatest(data.LongerTermContext.EMA20Values)
@@ -528,6 +528,8 @@ func formatMultiTimeframeTable(symbol string, data *market.Data) string {
 		bbUpper4H = getLatest(data.LongerTermContext.BBUpperValues)
 		bbMiddle4H = getLatest(data.LongerTermContext.BBMiddleValues)
 		bbLower4H = getLatest(data.LongerTermContext.BBLowerValues)
+		takerBuy4H = getLatest(data.LongerTermContext.TakerBuyRatios)
+		bsr4H = getLatest(data.LongerTermContext.BuySellRatios)
 	}
 
 	// 1H数据
@@ -578,8 +580,8 @@ func formatMultiTimeframeTable(symbol string, data *market.Data) string {
 	// 格式化表格
 	sb.WriteString("周期 | 收盘价 | EMA20 | MACD | RSI(7) | CCI(20) | BB上轨 | BB中轨 | BB下轨 | TakerBuyRatio | BSR\n")
 	sb.WriteString(":--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :---\n")
-	sb.WriteString(fmt.Sprintf("4H | %.4f | %.4f | %.4f | %.2f | %.2f | %.4f | %.4f | %.4f | - | -\n",
-		close4H, ema4H, macd4H, rsi4H, cci4H, bbUpper4H, bbMiddle4H, bbLower4H))
+	sb.WriteString(fmt.Sprintf("4H | %.4f | %.4f | %.4f | %.2f | %.2f | %.4f | %.4f | %.4f | %.3f | %.3f\n",
+		close4H, ema4H, macd4H, rsi4H, cci4H, bbUpper4H, bbMiddle4H, bbLower4H, takerBuy4H, bsr4H))
 	sb.WriteString(fmt.Sprintf("1H | %.4f | %.4f | %.4f | %.2f | %.2f | %.4f | %.4f | %.4f | %.3f | %.3f\n",
 		close1H, ema1H, macd1H, rsi1H, cci1H, bbUpper1H, bbMiddle1H, bbLower1H, takerBuy1H, bsr1H))
 	sb.WriteString(fmt.Sprintf("15m | %.4f | %.4f | %.4f | %.2f | %.2f | %.4f | %.4f | %.4f | %.3f | %.3f\n",
