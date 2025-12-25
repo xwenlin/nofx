@@ -206,3 +206,25 @@ export interface TraderConfigData {
   scan_interval_minutes: number
   is_running: boolean
 }
+
+// 交易记录
+export interface TradeRecord {
+  id: number
+  trader_id: string
+  symbol: string
+  side: string // "long" or "short"
+  open_time: string
+  close_time: string | null
+  open_price: number
+  close_price: number | null
+  quantity: number
+  leverage: number
+  pnl: number | null
+  pnl_pct: number | null
+  close_reason: string | null // "manual", "stop_loss", "take_profit", "emergency"
+  order_id_open: number
+  order_id_close: number | null
+  was_stop_loss: boolean
+  created_at: string
+  updated_at: string
+}
