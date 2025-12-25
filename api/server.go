@@ -183,6 +183,7 @@ func (s *Server) setupRoutes() {
 			protected.GET("/decisions/latest", s.handleLatestDecisions)
 			protected.GET("/statistics", s.handleStatistics)
 			protected.GET("/performance", s.handlePerformance)
+			protected.GET("/trades", s.handleGetTrades)
 		}
 	}
 }
@@ -1704,6 +1705,28 @@ func (s *Server) handlePerformance(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, performance)
+}
+
+// handleGetTrades 获取交易历史记录
+func (s *Server) handleGetTrades(c *gin.Context) {
+	_, traderID, err := s.getTraderFromQuery(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	limit := 50
+	if l, err := strconv.Atoi(c.Query("limit")); err == nil && l > 0 && l <= 200 {
+		limit = l
+	}
+
+	trades, err := s.database.GetTradesByTrader(traderID, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("获取交易记录失败: %v", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, trades)
 }
 
 // authMiddleware JWT认证中间件

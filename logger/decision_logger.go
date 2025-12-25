@@ -69,6 +69,8 @@ type DecisionAction struct {
 type DecisionLogger struct {
 	logDir      string
 	cycleNumber int
+	db          config.DatabaseInterface
+	traderID    string
 }
 
 // NewDecisionLogger 创建决策日志记录器
@@ -93,6 +95,12 @@ func NewDecisionLogger(logDir string) *DecisionLogger {
 	}
 }
 
+// SetDatabase 设置数据库
+func (l *DecisionLogger) SetDatabase(db config.DatabaseInterface, traderID string) {
+	l.db = db
+	l.traderID = traderID
+}
+
 // LogDecision 记录决策
 func (l *DecisionLogger) LogDecision(record *DecisionRecord) error {
 	l.cycleNumber++
@@ -112,47 +120,72 @@ func (l *DecisionLogger) LogDecision(record *DecisionRecord) error {
 		return fmt.Errorf("序列化决策记录失败: %w", err)
 	}
 
+	// 1. 写入文件（保持原有逻辑作为备份）
 	// 写入文件（使用安全权限：只有所有者可读写）
 	if err := os.WriteFile(filepath, data, 0600); err != nil {
-		return fmt.Errorf("写入决策记录失败: %w", err)
+		// 记录错误但继续尝试写入数据库
+		fmt.Printf("⚠ 写入决策日志文件失败: %v\n", err)
+	} else {
+		fmt.Printf("📝 决策记录已保存到文件: %s\n", filename)
 	}
 
-	fmt.Printf("📝 决策记录已保存: %s\n", filename)
+	// 2. 写入数据库（如果已配置）
+	if l.db != nil && l.traderID != "" {
+		// 序列化复杂对象
+		execLogJSON, _ := json.Marshal(record.ExecutionLog)
+		accountStateJSON, _ := json.Marshal(record.AccountState)
+		positionsJSON, _ := json.Marshal(record.Positions)
+
+		log := &config.DecisionLog{
+			TraderID:            l.traderID,
+			CycleNumber:         record.CycleNumber,
+			Timestamp:           record.Timestamp,
+			Content:             string(data),
+			SystemPrompt:        record.SystemPrompt,
+			InputPrompt:         record.InputPrompt,
+			CoTTrace:            record.CoTTrace,
+			DecisionJSON:        record.DecisionJSON,
+			AccountState:        string(accountStateJSON),
+			Positions:           string(positionsJSON),
+			ExecutionLog:        string(execLogJSON),
+			Success:             record.Success,
+			Error:               record.ErrorMessage,
+			AIRequestDurationMs: record.AIRequestDurationMs,
+		}
+
+		if err := l.db.CreateDecisionLog(log); err != nil {
+			fmt.Printf("⚠ 写入决策日志到数据库失败: %v\n", err)
+			return fmt.Errorf("写入决策日志到数据库失败: %w", err)
+		} else {
+			fmt.Printf("📝 决策记录已保存到数据库 (ID: %d)\n", log.ID)
+		}
+	}
+
 	return nil
 }
 
 // GetLatestRecords 获取最近N条记录（按时间正序：从旧到新）
 func (l *DecisionLogger) GetLatestRecords(n int) ([]*DecisionRecord, error) {
-	files, err := os.ReadDir(l.logDir)
+	if l.db == nil || l.traderID == "" {
+		return nil, fmt.Errorf("数据库未配置，无法获取决策记录")
+	}
+
+	logs, err := l.db.GetDecisionLogs(l.traderID, n)
 	if err != nil {
-		return nil, fmt.Errorf("读取日志目录失败: %w", err)
+		return nil, fmt.Errorf("从数据库读取决策日志失败: %w", err)
 	}
 
-	// 先按修改时间倒序收集（最新的在前）
 	var records []*DecisionRecord
-	count := 0
-	for i := len(files) - 1; i >= 0 && count < n; i-- {
-		file := files[i]
-		if file.IsDir() {
-			continue
-		}
-
-		filepath := filepath.Join(l.logDir, file.Name())
-		data, err := os.ReadFile(filepath)
-		if err != nil {
-			continue
-		}
-
+	// 数据库返回的是按时间倒序（最新的在前）
+	for _, logEntry := range logs {
 		var record DecisionRecord
-		if err := json.Unmarshal(data, &record); err != nil {
+		if err := json.Unmarshal([]byte(logEntry.Content), &record); err != nil {
 			continue
 		}
-
 		records = append(records, &record)
-		count++
 	}
 
-	// 反转数组，让时间从旧到新排列（用于图表显示）
+	// 反转数组，让时间从旧到新排列（用于图表显示等需要时间正序的场景）
 	for i, j := 0, len(records)-1; i < j; i, j = i+1, j-1 {
 		records[i], records[j] = records[j], records[i]
 	}
@@ -162,34 +195,39 @@ func (l *DecisionLogger) GetLatestRecords(n int) ([]*DecisionRecord, error) {
 
 // GetRecordByDate 获取指定日期的所有记录
 func (l *DecisionLogger) GetRecordByDate(date time.Time) ([]*DecisionRecord, error) {
-	dateStr := date.Format("20060102")
-	pattern := filepath.Join(l.logDir, fmt.Sprintf("decision_%s_*.json", dateStr))
+	if l.db == nil || l.traderID == "" {
+		return nil, fmt.Errorf("数据库未配置，无法获取决策记录")
+	}
 
-	files, err := filepath.Glob(pattern)
+	// 获取该日期的开始和结束时间
+	startTime := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	endTime := startTime.AddDate(0, 0, 1)
+
+	// 获取足够多的记录（假设一天最多1000条）
+	logs, err := l.db.GetDecisionLogs(l.traderID, 1000)
 	if err != nil {
-		return nil, fmt.Errorf("查找日志文件失败: %w", err)
+		return nil, fmt.Errorf("从数据库读取决策日志失败: %w", err)
 	}
 
 	var records []*DecisionRecord
-	for _, filepath := range files {
-		data, err := os.ReadFile(filepath)
-		if err != nil {
-			continue
+	for _, logEntry := range logs {
+		// 过滤出指定日期的记录
+		if logEntry.Timestamp.After(startTime) && logEntry.Timestamp.Before(endTime) {
+			var record DecisionRecord
+			if err := json.Unmarshal([]byte(logEntry.Content), &record); err != nil {
+				continue
+			}
+			records = append(records, &record)
 		}
-
-		var record DecisionRecord
-		if err := json.Unmarshal(data, &record); err != nil {
-			continue
-		}
-
-		records = append(records, &record)
 	}
 
 	return records, nil
 }
 
-// CleanOldRecords 清理N天前的旧记录
+// CleanOldRecords 清理N天前的旧记录（数据库记录由数据库自动管理，此方法保留用于清理文件备份）
 func (l *DecisionLogger) CleanOldRecords(days int) error {
+	// 数据库记录由数据库自动管理，不需要手动清理
+	// 此方法保留用于清理文件备份（如果需要）
 	cutoffTime := time.Now().AddDate(0, 0, -days)
 
 	files, err := os.ReadDir(l.logDir)
@@ -211,7 +249,7 @@ func (l *DecisionLogger) CleanOldRecords(days int) error {
 		if info.ModTime().Before(cutoffTime) {
 			filepath := filepath.Join(l.logDir, file.Name())
 			if err := os.Remove(filepath); err != nil {
-				fmt.Printf("⚠ 删除旧记录失败 %s: %v\n", file.Name(), err)
+				fmt.Printf("⚠ 删除旧文件备份失败 %s: %v\n", file.Name(), err)
 				continue
 			}
 			removedCount++
@@ -219,7 +257,7 @@ func (l *DecisionLogger) CleanOldRecords(days int) error {
 	}
 
 	if removedCount > 0 {
-		fmt.Printf("🗑️ 已清理 %d 条旧记录（%d天前）\n", removedCount, days)
+		fmt.Printf("🗑️ 已清理 %d 个旧文件备份（%d天前）\n", removedCount, days)
 	}
 
 	return nil
@@ -227,26 +265,21 @@ func (l *DecisionLogger) CleanOldRecords(days int) error {
 
 // GetStatistics 获取统计信息
 func (l *DecisionLogger) GetStatistics() (*Statistics, error) {
-	files, err := os.ReadDir(l.logDir)
+	if l.db == nil || l.traderID == "" {
+		return nil, fmt.Errorf("数据库未配置，无法获取统计信息")
+	}
+
+	// 获取所有记录（使用足够大的limit）
+	logs, err := l.db.GetDecisionLogs(l.traderID, 10000)
 	if err != nil {
-		return nil, fmt.Errorf("读取日志目录失败: %w", err)
+		return nil, fmt.Errorf("从数据库读取决策日志失败: %w", err)
 	}
 
 	stats := &Statistics{}
 
-	for _, file := range files {
-		if file.IsDir() {
-			continue
-		}
-
-		filepath := filepath.Join(l.logDir, file.Name())
-		data, err := os.ReadFile(filepath)
-		if err != nil {
-			continue
-		}
-
+	for _, logEntry := range logs {
 		var record DecisionRecord
-		if err := json.Unmarshal(data, &record); err != nil {
+		if err := json.Unmarshal([]byte(logEntry.Content), &record); err != nil {
 			continue
 		}
 
@@ -332,16 +365,12 @@ type SymbolPerformance struct {
 	AvgPnL        float64 `json:"avg_pn_l"`       // 平均盈亏
 }
 
-// AnalyzePerformance 分析最近N个周期的交易表现
-// 如果提供了 database 和 traderID，则从数据库查询（更高效）；否则从日志文件查询（向后兼容）
+// AnalyzePerformance 分析最近N个周期的交易表现（从数据库查询）
 func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int, database interface{}, traderID string) (*PerformanceAnalysis, error) {
-	// 如果提供了数据库，优先使用数据库查询
-	if database != nil && traderID != "" {
-		return l.analyzePerformanceFromDB(database, traderID)
+	if database == nil || traderID == "" {
+		return nil, fmt.Errorf("数据库未配置，无法分析交易表现")
 	}
-
-	// 否则使用原来的文件查询方式（向后兼容）
-	return l.analyzePerformanceFromFiles(lookbackCycles)
+	return l.analyzePerformanceFromDB(database, traderID)
 }
 
 // analyzePerformanceFromDB 从数据库分析交易表现
@@ -490,428 +519,6 @@ func (l *DecisionLogger) analyzePerformanceFromDB(database interface{}, traderID
 	analysis.SharpeRatio = l.calculateRollingSharpeRatio(tradesForStats)
 
 	// 限制 RecentTrades 为最近10笔（用于显示）
-	if len(analysis.RecentTrades) > 10 {
-		analysis.RecentTrades = analysis.RecentTrades[:10]
-	}
-
-	return analysis, nil
-}
-
-// analyzePerformanceFromFiles 从日志文件分析交易表现（原来的实现，向后兼容）
-func (l *DecisionLogger) analyzePerformanceFromFiles(lookbackCycles int) (*PerformanceAnalysis, error) {
-	records, err := l.GetLatestRecords(lookbackCycles)
-	if err != nil {
-		return nil, fmt.Errorf("读取历史记录失败: %w", err)
-	}
-
-	if len(records) == 0 {
-		return &PerformanceAnalysis{
-			RecentTrades: []TradeOutcome{},
-			SymbolStats:  make(map[string]*SymbolPerformance),
-		}, nil
-	}
-
-	analysis := &PerformanceAnalysis{
-		RecentTrades: []TradeOutcome{},
-		SymbolStats:  make(map[string]*SymbolPerformance),
-	}
-
-	// 追踪持仓状态：symbol_side -> {side, openPrice, openTime, quantity, leverage}
-	openPositions := make(map[string]map[string]interface{})
-
-	// 为了避免开仓记录在窗口外导致匹配失败，需要从所有历史记录中查找开仓记录
-	// 使用足够大的窗口（10000个周期，约500小时）来查找开仓记录，确保能匹配到所有可能的开仓
-	// 这样即使交易持仓时间很长，也能正确匹配开仓和平仓
-	allRecords, err := l.GetLatestRecords(10000) // 从所有历史记录中查找（最多10000个周期）
-
-	// 确定分析窗口的起始位置（在allRecords中的索引）
-	// records是分析窗口内的记录（最近的lookbackCycles个周期）
-	// allRecords包含所有历史记录（最多10000个周期），按时间从旧到新排序
-	windowStartIdx := 0
-	if len(allRecords) > len(records) {
-		windowStartIdx = len(allRecords) - len(records)
-	}
-
-	if err == nil && len(allRecords) > 0 {
-		// 从所有历史记录中收集开仓记录（按时间顺序，从旧到新）
-		// 关键：只删除分析窗口外的平仓记录，保留窗口内的平仓对应的开仓记录
-		for i, record := range allRecords {
-			for _, action := range record.Decisions {
-				if !action.Success {
-					continue
-				}
-
-				symbol := action.Symbol
-				side := ""
-				if action.Action == "open_long" || action.Action == "close_long" || action.Action == "partial_close" || action.Action == "auto_close_long" {
-					side = "long"
-				} else if action.Action == "open_short" || action.Action == "close_short" || action.Action == "auto_close_short" {
-					side = "short"
-				}
-
-				// partial_close 需要根據持倉判斷方向
-				if action.Action == "partial_close" && side == "" {
-					for key, pos := range openPositions {
-						if posSymbol, _ := pos["side"].(string); key == symbol+"_"+posSymbol {
-							side = posSymbol
-							break
-						}
-					}
-				}
-
-				posKey := symbol + "_" + side
-
-				switch action.Action {
-				case "open_long", "open_short":
-					// 记录开仓（后续的开仓会覆盖之前的，确保使用最新的开仓记录）
-					openPositions[posKey] = map[string]interface{}{
-						"side":      side,
-						"openPrice": action.Price,
-						"openTime":  action.Timestamp,
-						"quantity":  action.Quantity,
-						"leverage":  action.Leverage,
-					}
-				case "close_long", "close_short", "auto_close_long", "auto_close_short":
-					// 只删除分析窗口外的平仓记录对应的开仓
-					// 如果平仓在分析窗口外，说明这个交易已经在窗口前完成，不需要保留开仓记录
-					// 如果平仓在分析窗口内，需要保留开仓记录，以便在窗口内匹配
-					if i < windowStartIdx {
-						// 这个平仓在分析窗口外，可以安全删除对应的开仓记录
-						delete(openPositions, posKey)
-					}
-					// 如果平仓在分析窗口内，不删除，保留开仓记录供后续匹配使用
-				}
-			}
-		}
-	}
-
-	// 遍历分析窗口内的记录，生成交易结果
-	for _, record := range records {
-		for _, action := range record.Decisions {
-			if !action.Success {
-				continue
-			}
-
-			symbol := action.Symbol
-			side := ""
-			if action.Action == "open_long" || action.Action == "close_long" || action.Action == "partial_close" || action.Action == "auto_close_long" {
-				side = "long"
-			} else if action.Action == "open_short" || action.Action == "close_short" || action.Action == "auto_close_short" {
-				side = "short"
-			}
-
-			// partial_close 需要根據持倉判斷方向
-			if action.Action == "partial_close" {
-				// 從 openPositions 中查找持倉方向
-				for key, pos := range openPositions {
-					if posSymbol, _ := pos["side"].(string); key == symbol+"_"+posSymbol {
-						side = posSymbol
-						break
-					}
-				}
-			}
-
-			posKey := symbol + "_" + side // 使用symbol_side作为key，区分多空持仓
-
-			switch action.Action {
-			case "open_long", "open_short":
-				// 更新开仓记录（可能已经在预填充时记录过了）
-				openPositions[posKey] = map[string]interface{}{
-					"side":               side,
-					"openPrice":          action.Price,
-					"openTime":           action.Timestamp,
-					"quantity":           action.Quantity,
-					"leverage":           action.Leverage,
-					"remainingQuantity":  action.Quantity, // 🔧 BUG FIX：追蹤剩餘數量
-					"accumulatedPnL":     0.0,             // 🔧 BUG FIX：累積部分平倉盈虧
-					"partialCloseCount":  0,               // 🔧 BUG FIX：部分平倉次數
-					"partialCloseVolume": 0.0,             // 🔧 BUG FIX：部分平倉總量
-				}
-
-			case "close_long", "close_short", "partial_close", "auto_close_long", "auto_close_short":
-				// 查找对应的开仓记录（可能来自预填充或当前窗口）
-				if openPos, exists := openPositions[posKey]; exists {
-					openPrice := openPos["openPrice"].(float64)
-					openTime := openPos["openTime"].(time.Time)
-					side := openPos["side"].(string)
-					quantity := openPos["quantity"].(float64)
-					leverage := openPos["leverage"].(int)
-
-					// 🔧 BUG FIX：取得追蹤字段（若不存在則初始化）
-					remainingQty, _ := openPos["remainingQuantity"].(float64)
-					if remainingQty == 0 {
-						remainingQty = quantity // 兼容舊數據（沒有 remainingQuantity 字段）
-					}
-					accumulatedPnL, _ := openPos["accumulatedPnL"].(float64)
-					partialCloseCount, _ := openPos["partialCloseCount"].(int)
-					partialCloseVolume, _ := openPos["partialCloseVolume"].(float64)
-
-					// 对于 partial_close，使用实际平仓数量；否则使用剩余仓位数量
-					actualQuantity := remainingQty
-					if action.Action == "partial_close" {
-						actualQuantity = action.Quantity
-					}
-
-					// 计算本次平仓的盈亏（USDT）
-					var pnl float64
-					if side == "long" {
-						pnl = actualQuantity * (action.Price - openPrice)
-					} else {
-						pnl = actualQuantity * (openPrice - action.Price)
-					}
-
-					// 🔧 BUG FIX：處理 partial_close 聚合邏輯
-					if action.Action == "partial_close" {
-						// 累積盈虧和數量
-						accumulatedPnL += pnl
-						remainingQty -= actualQuantity
-						partialCloseCount++
-						partialCloseVolume += actualQuantity
-
-						// 更新 openPositions（保留持倉記錄，但更新追蹤數據）
-						openPos["remainingQuantity"] = remainingQty
-						openPos["accumulatedPnL"] = accumulatedPnL
-						openPos["partialCloseCount"] = partialCloseCount
-						openPos["partialCloseVolume"] = partialCloseVolume
-
-						// 判斷是否已完全平倉
-						if remainingQty <= 0.0001 { // 使用小閾值避免浮點誤差
-							// ✅ 完全平倉：記錄為一筆完整交易
-							positionValue := quantity * openPrice
-							marginUsed := positionValue / float64(leverage)
-							pnlPct := 0.0
-							if marginUsed > 0 {
-								pnlPct = (accumulatedPnL / marginUsed) * 100
-							}
-
-							outcome := TradeOutcome{
-								Symbol:        symbol,
-								Side:          side,
-								Quantity:      quantity, // 使用原始總量
-								Leverage:      leverage,
-								OpenPrice:     openPrice,
-								ClosePrice:    action.Price, // 最後一次平倉價格
-								PositionValue: positionValue,
-								MarginUsed:    marginUsed,
-								PnL:           accumulatedPnL, // 🔧 使用累積盈虧
-								PnLPct:        pnlPct,
-								Duration:      action.Timestamp.Sub(openTime).String(),
-								OpenTime:      openTime,
-								CloseTime:     action.Timestamp,
-							}
-
-							analysis.RecentTrades = append(analysis.RecentTrades, outcome)
-							analysis.TotalTrades++ // 🔧 只在完全平倉時計數
-
-							// 分类交易
-							if accumulatedPnL > 0 {
-								analysis.WinningTrades++
-								analysis.AvgWin += accumulatedPnL
-							} else if accumulatedPnL < 0 {
-								analysis.LosingTrades++
-								analysis.AvgLoss += accumulatedPnL
-							}
-
-							// 更新币种统计
-							if _, exists := analysis.SymbolStats[symbol]; !exists {
-								analysis.SymbolStats[symbol] = &SymbolPerformance{
-									Symbol: symbol,
-								}
-							}
-							stats := analysis.SymbolStats[symbol]
-							stats.TotalTrades++
-							stats.TotalPnL += accumulatedPnL
-							if accumulatedPnL > 0 {
-								stats.WinningTrades++
-							} else if accumulatedPnL < 0 {
-								stats.LosingTrades++
-							}
-
-							// 刪除持倉記錄
-							delete(openPositions, posKey)
-						}
-						// ⚠️ 否則不做任何操作（等待後續 partial_close 或 full close）
-
-					} else {
-						// 🔧 完全平倉（close_long/close_short/auto_close）
-						// 如果之前有部分平倉，需要加上累積的 PnL
-						totalPnL := accumulatedPnL + pnl
-
-						positionValue := quantity * openPrice
-						marginUsed := positionValue / float64(leverage)
-						pnlPct := 0.0
-						if marginUsed > 0 {
-							pnlPct = (totalPnL / marginUsed) * 100
-						}
-
-						outcome := TradeOutcome{
-							Symbol:        symbol,
-							Side:          side,
-							Quantity:      quantity, // 使用原始總量
-							Leverage:      leverage,
-							OpenPrice:     openPrice,
-							ClosePrice:    action.Price,
-							PositionValue: positionValue,
-							MarginUsed:    marginUsed,
-							PnL:           totalPnL, // 🔧 包含之前部分平倉的 PnL
-							PnLPct:        pnlPct,
-							Duration:      action.Timestamp.Sub(openTime).String(),
-							OpenTime:      openTime,
-							CloseTime:     action.Timestamp,
-						}
-
-						analysis.RecentTrades = append(analysis.RecentTrades, outcome)
-						analysis.TotalTrades++
-
-						// 分类交易
-						if totalPnL > 0 {
-							analysis.WinningTrades++
-							analysis.AvgWin += totalPnL
-						} else if totalPnL < 0 {
-							analysis.LosingTrades++
-							analysis.AvgLoss += totalPnL
-						}
-
-						// 更新币种统计
-						if _, exists := analysis.SymbolStats[symbol]; !exists {
-							analysis.SymbolStats[symbol] = &SymbolPerformance{
-								Symbol: symbol,
-							}
-						}
-						stats := analysis.SymbolStats[symbol]
-						stats.TotalTrades++
-						stats.TotalPnL += totalPnL
-						if totalPnL > 0 {
-							stats.WinningTrades++
-						} else if totalPnL < 0 {
-							stats.LosingTrades++
-						}
-
-						// 刪除持倉記錄
-						delete(openPositions, posKey)
-					}
-				}
-			}
-		}
-	}
-
-	// 反转数组，让最新的在前
-	if len(analysis.RecentTrades) > 0 {
-		for i, j := 0, len(analysis.RecentTrades)-1; i < j; i, j = i+1, j-1 {
-			analysis.RecentTrades[i], analysis.RecentTrades[j] = analysis.RecentTrades[j], analysis.RecentTrades[i]
-		}
-	}
-
-	// 只取最近20笔交易用于计算所有统计指标
-	var tradesForStats []TradeOutcome
-	if len(analysis.RecentTrades) > 20 {
-		tradesForStats = make([]TradeOutcome, 20)
-		copy(tradesForStats, analysis.RecentTrades[:20])
-	} else {
-		tradesForStats = make([]TradeOutcome, len(analysis.RecentTrades))
-		copy(tradesForStats, analysis.RecentTrades)
-	}
-
-	// 基于最近20笔交易重新计算所有统计指标
-	analysis.TotalTrades = len(tradesForStats)
-	analysis.WinningTrades = 0
-	analysis.LosingTrades = 0
-	analysis.AvgWin = 0.0
-	analysis.AvgLoss = 0.0
-	analysis.AvgWinPct = 0.0
-	analysis.AvgLossPct = 0.0
-	totalWinAmount := 0.0
-	totalLossAmount := 0.0
-	winSumPct := 0.0
-	winCountPct := 0
-	lossSumPct := 0.0
-	lossCountPct := 0
-
-	// 重新计算币种统计（基于最近20笔交易）
-	analysis.SymbolStats = make(map[string]*SymbolPerformance)
-	bestPnL := -999999.0
-	worstPnL := 999999.0
-
-	for _, trade := range tradesForStats {
-		// 统计盈亏
-		if trade.PnL > 0 {
-			analysis.WinningTrades++
-			totalWinAmount += trade.PnL
-			winSumPct += trade.PnLPct
-			winCountPct++
-		} else if trade.PnL < 0 {
-			analysis.LosingTrades++
-			totalLossAmount += trade.PnL
-			lossSumPct += trade.PnLPct
-			lossCountPct++
-		}
-
-		// 更新币种统计
-		if _, exists := analysis.SymbolStats[trade.Symbol]; !exists {
-			analysis.SymbolStats[trade.Symbol] = &SymbolPerformance{
-				Symbol: trade.Symbol,
-			}
-		}
-		stats := analysis.SymbolStats[trade.Symbol]
-		stats.TotalTrades++
-		stats.TotalPnL += trade.PnL
-		if trade.PnL > 0 {
-			stats.WinningTrades++
-		} else if trade.PnL < 0 {
-			stats.LosingTrades++
-		}
-	}
-
-	// 计算统计指标
-	if analysis.TotalTrades > 0 {
-		analysis.WinRate = (float64(analysis.WinningTrades) / float64(analysis.TotalTrades)) * 100
-
-		if analysis.WinningTrades > 0 {
-			analysis.AvgWin = totalWinAmount / float64(analysis.WinningTrades)
-			analysis.AvgWinPct = winSumPct / float64(winCountPct)
-		}
-		if analysis.LosingTrades > 0 {
-			analysis.AvgLoss = totalLossAmount / float64(analysis.LosingTrades)
-			analysis.AvgLossPct = lossSumPct / float64(lossCountPct)
-		}
-
-		// Profit Factor = 总盈利 / 总亏损（绝对值）
-		// 注意：totalLossAmount 是负数，所以取负号得到绝对值
-		if totalLossAmount != 0 {
-			analysis.ProfitFactor = totalWinAmount / (-totalLossAmount)
-		} else if totalWinAmount > 0 {
-			// 只有盈利没有亏损的情况，设置为一个很大的值表示完美策略
-			analysis.ProfitFactor = 999.0
-		}
-	}
-
-	// 计算各币种胜率和平均盈亏
-	for symbol, stats := range analysis.SymbolStats {
-		if stats.TotalTrades > 0 {
-			stats.WinRate = (float64(stats.WinningTrades) / float64(stats.TotalTrades)) * 100
-			stats.AvgPnL = stats.TotalPnL / float64(stats.TotalTrades)
-
-			if stats.TotalPnL > bestPnL {
-				bestPnL = stats.TotalPnL
-				analysis.BestSymbol = symbol
-			}
-			if stats.TotalPnL < worstPnL {
-				worstPnL = stats.TotalPnL
-				analysis.WorstSymbol = symbol
-			}
-		}
-	}
-
-	// 计算滚动夏普比率（基于最近20笔交易，或全部交易如果不足20笔）
-	// 反转回时间顺序（旧到新），用于计算
-	tradesForSharpe := make([]TradeOutcome, len(tradesForStats))
-	copy(tradesForSharpe, tradesForStats)
-	for i, j := 0, len(tradesForSharpe)-1; i < j; i, j = i+1, j-1 {
-		tradesForSharpe[i], tradesForSharpe[j] = tradesForSharpe[j], tradesForSharpe[i]
-	}
-	analysis.SharpeRatio = l.calculateRollingSharpeRatio(tradesForSharpe)
-
-	// 只保留最近的10笔交易用于显示
 	if len(analysis.RecentTrades) > 10 {
 		analysis.RecentTrades = analysis.RecentTrades[:10]
 	}

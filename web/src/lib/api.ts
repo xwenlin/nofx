@@ -8,6 +8,7 @@ import type {
   Position,
   Statistics,
   SystemStatus,
+  TradeRecord,
   TraderInfo,
   UpdateExchangeConfigRequest,
   UpdateModelConfigRequest,
@@ -429,6 +430,22 @@ export const api = {
   }> {
     const res = await httpClient.get(`${API_BASE}/server-ip`, getAuthHeaders())
     if (!res.ok) throw new Error('获取服务器IP失败')
+    return res.json()
+  },
+
+  // 获取交易历史记录（支持trader_id和limit参数）
+  async getTrades(traderId?: string, limit: number = 50): Promise<TradeRecord[]> {
+    const params = new URLSearchParams()
+    if (traderId) {
+      params.append('trader_id', traderId)
+    }
+    params.append('limit', limit.toString())
+
+    const res = await httpClient.get(
+      `${API_BASE}/trades?${params}`,
+      getAuthHeaders()
+    )
+    if (!res.ok) throw new Error('获取交易记录失败')
     return res.json()
   },
 }

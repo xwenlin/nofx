@@ -26,6 +26,7 @@ type DatabaseInterface interface {
 	GetUserByID(userID string) (*User, error)
 	GetAllUsers() ([]string, error)
 	UpdateUserOTPVerified(userID string, verified bool) error
+	ResetUserOTP(userID string) (string, error) // 重置用户OTP密钥，返回新密钥
 	GetAIModels(userID string) ([]*AIModelConfig, error)
 	UpdateAIModel(userID, id string, enabled bool, apiKey, customAPIURL, customModelName string) error
 	GetExchanges(userID string) ([]*ExchangeConfig, error)
@@ -56,6 +57,9 @@ type DatabaseInterface interface {
 	GetOpenTrades(traderID string) ([]*TradeRecord, error)
 	GetTradesByTrader(traderID string, limit int) ([]*TradeRecord, error)
 	GetTradesBySymbol(traderID, symbol string, limit int) ([]*TradeRecord, error)
+	// 决策日志相关方法
+	CreateDecisionLog(log *DecisionLog) error
+	GetDecisionLogs(traderID string, limit int) ([]*DecisionLog, error)
 	Close() error
 }
 
@@ -234,6 +238,27 @@ func (d *Database) createTables() error {
 			was_stop_loss BOOLEAN DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (trader_id) REFERENCES traders(id) ON DELETE CASCADE
+		)`,
+
+		// 决策日志表
+		`CREATE TABLE IF NOT EXISTS decisions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			trader_id TEXT NOT NULL,
+			cycle_number INTEGER NOT NULL,
+			timestamp DATETIME NOT NULL,
+			content TEXT NOT NULL, -- 完整的JSON content（保留用于完整恢复）
+			system_prompt TEXT DEFAULT '', -- 系统Prompt
+			input_prompt TEXT DEFAULT '', -- AI输入Prompt
+			cot_trace TEXT DEFAULT '', -- AI思维链
+			decision_json TEXT DEFAULT '', -- AI输出的决策JSON
+			account_state TEXT DEFAULT '', -- 账户状态快照 (JSON)
+			positions TEXT DEFAULT '', -- 持仓快照 (JSON)
+			execution_log TEXT DEFAULT '', -- 执行日志（JSON数组字符串）
+			success BOOLEAN DEFAULT 1,
+			error TEXT DEFAULT '',
+			ai_request_duration_ms INTEGER DEFAULT 0, -- AI请求耗时(ms)
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (trader_id) REFERENCES traders(id) ON DELETE CASCADE
 		)`,
 
@@ -571,6 +596,26 @@ type TradeRecord struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
+// DecisionLog 决策日志
+type DecisionLog struct {
+	ID                  int64     `json:"id"`
+	TraderID            string    `json:"trader_id"`
+	CycleNumber         int       `json:"cycle_number"`
+	Timestamp           time.Time `json:"timestamp"`
+	Content             string    `json:"content"` // 完整的JSON content
+	SystemPrompt        string    `json:"system_prompt"`
+	InputPrompt         string    `json:"input_prompt"`
+	CoTTrace            string    `json:"cot_trace"`
+	DecisionJSON        string    `json:"decision_json"`
+	AccountState        string    `json:"account_state"` // JSON string
+	Positions           string    `json:"positions"`     // JSON string
+	ExecutionLog        string    `json:"execution_log"` // JSON string of []string
+	Success             bool      `json:"success"`
+	Error               string    `json:"error"`
+	AIRequestDurationMs int64     `json:"ai_request_duration_ms"`
+	CreatedAt           time.Time `json:"created_at"`
+}
+
 // GenerateOTPSecret 生成OTP密钥
 func GenerateOTPSecret() (string, error) {
 	secret := make([]byte, 20)
@@ -681,6 +726,28 @@ func (d *Database) UpdateUserPassword(userID, passwordHash string) error {
 		WHERE id = ?
 	`, passwordHash, userID)
 	return err
+}
+
+// ResetUserOTP 重置用户OTP密钥，生成新的密钥并返回
+// 同时将otp_verified设置为false，用户需要重新设置OTP
+func (d *Database) ResetUserOTP(userID string) (string, error) {
+	// 生成新的OTP密钥
+	newOTPSecret, err := GenerateOTPSecret()
+	if err != nil {
+		return "", fmt.Errorf("生成OTP密钥失败: %w", err)
+	}
+
+	// 更新数据库中的OTP密钥，并将验证状态设置为false
+	_, err = d.db.Exec(`
+		UPDATE users
+		SET otp_secret = ?, otp_verified = 0, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, newOTPSecret, userID)
+	if err != nil {
+		return "", fmt.Errorf("更新OTP密钥失败: %w", err)
+	}
+
+	return newOTPSecret, nil
 }
 
 // GetAIModels 获取用户的AI模型配置
@@ -1154,7 +1221,6 @@ func (d *Database) GetTraderConfig(userID, traderID string) (*TraderRecord, *AIM
 		WHERE id = ? AND user_id = ?
 	`, trader.AIModelID, userID).Scan(
 		&aiModel.ID, &aiModel.UserID, &aiModel.Name, &aiModel.Provider, &aiModel.Enabled, &aiModel.APIKey,
-		&aiModel.CustomAPIURL, &aiModel.CustomModelName,
 		&aiModel.CustomAPIURL, &aiModel.CustomModelName,
 		&aiModel.CreatedAt, &aiModel.UpdatedAt,
 	)
@@ -1699,4 +1765,68 @@ func (d *Database) GetTradesBySymbol(traderID, symbol string, limit int) ([]*Tra
 	}
 
 	return trades, nil
+}
+
+// CreateDecisionLog 创建决策日志
+func (d *Database) CreateDecisionLog(log *DecisionLog) error {
+	result, err := d.db.Exec(`
+		INSERT INTO decisions (trader_id, cycle_number, timestamp, content, system_prompt, input_prompt, cot_trace, decision_json, account_state, positions, execution_log, success, error, ai_request_duration_ms)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, log.TraderID, log.CycleNumber, log.Timestamp, log.Content, log.SystemPrompt, log.InputPrompt, log.CoTTrace, log.DecisionJSON, log.AccountState, log.Positions, log.ExecutionLog, log.Success, log.Error, log.AIRequestDurationMs)
+	if err != nil {
+		return fmt.Errorf("创建决策日志失败: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("获取决策日志ID失败: %w", err)
+	}
+	log.ID = id
+	return nil
+}
+
+// GetDecisionLogs 获取决策日志
+func (d *Database) GetDecisionLogs(traderID string, limit int) ([]*DecisionLog, error) {
+	query := `
+		SELECT id, trader_id, cycle_number, timestamp, content, 
+		       COALESCE(system_prompt, '') as system_prompt,
+		       COALESCE(input_prompt, '') as input_prompt, 
+		       COALESCE(cot_trace, '') as cot_trace, 
+		       COALESCE(decision_json, '') as decision_json,
+		       COALESCE(account_state, '') as account_state,
+		       COALESCE(positions, '') as positions,
+		       COALESCE(execution_log, '') as execution_log,
+		       success, error, 
+		       COALESCE(ai_request_duration_ms, 0) as ai_request_duration_ms,
+		       created_at
+		FROM decisions
+		WHERE trader_id = ?
+		ORDER BY timestamp DESC
+	`
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	rows, err := d.db.Query(query, traderID)
+	if err != nil {
+		return nil, fmt.Errorf("查询决策日志失败: %w", err)
+	}
+	defer rows.Close()
+
+	var logs []*DecisionLog
+	for rows.Next() {
+		var l DecisionLog
+		err := rows.Scan(
+			&l.ID, &l.TraderID, &l.CycleNumber, &l.Timestamp, &l.Content,
+			&l.SystemPrompt, &l.InputPrompt, &l.CoTTrace, &l.DecisionJSON,
+			&l.AccountState, &l.Positions, &l.ExecutionLog,
+			&l.Success, &l.Error, &l.AIRequestDurationMs, &l.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("扫描决策日志失败: %w", err)
+		}
+		logs = append(logs, &l)
+	}
+
+	return logs, nil
 }

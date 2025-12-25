@@ -119,55 +119,55 @@ type AutoTrader struct {
 }
 
 // NewAutoTrader 创建自动交易器
-func NewAutoTrader(config AutoTraderConfig, database interface{}, userID string) (*AutoTrader, error) {
+func NewAutoTrader(traderConfig AutoTraderConfig, database interface{}, userID string) (*AutoTrader, error) {
 	// 设置默认值
-	if config.ID == "" {
-		config.ID = "default_trader"
+	if traderConfig.ID == "" {
+		traderConfig.ID = "default_trader"
 	}
-	if config.Name == "" {
-		config.Name = "Default Trader"
+	if traderConfig.Name == "" {
+		traderConfig.Name = "Default Trader"
 	}
-	if config.AIModel == "" {
-		if config.UseQwen {
-			config.AIModel = "qwen"
+	if traderConfig.AIModel == "" {
+		if traderConfig.UseQwen {
+			traderConfig.AIModel = "qwen"
 		} else {
-			config.AIModel = "deepseek"
+			traderConfig.AIModel = "deepseek"
 		}
 	}
 
 	mcpClient := mcp.New()
 
 	// 初始化AI
-	if config.AIModel == "custom" {
+	if traderConfig.AIModel == "custom" {
 		// 使用自定义API
-		mcpClient.SetCustomAPI(config.CustomAPIURL, config.CustomAPIKey, config.CustomModelName)
-		log.Printf("🤖 [%s] 使用自定义AI API: %s (模型: %s)", config.Name, config.CustomAPIURL, config.CustomModelName)
-	} else if config.UseQwen || config.AIModel == "qwen" {
+		mcpClient.SetCustomAPI(traderConfig.CustomAPIURL, traderConfig.CustomAPIKey, traderConfig.CustomModelName)
+		log.Printf("🤖 [%s] 使用自定义AI API: %s (模型: %s)", traderConfig.Name, traderConfig.CustomAPIURL, traderConfig.CustomModelName)
+	} else if traderConfig.UseQwen || traderConfig.AIModel == "qwen" {
 		// 使用Qwen (支持自定义URL和Model)
-		mcpClient.SetQwenAPIKey(config.QwenKey, config.CustomAPIURL, config.CustomModelName)
-		if config.CustomAPIURL != "" || config.CustomModelName != "" {
-			log.Printf("🤖 [%s] 使用阿里云Qwen AI (自定义URL: %s, 模型: %s)", config.Name, config.CustomAPIURL, config.CustomModelName)
+		mcpClient.SetQwenAPIKey(traderConfig.QwenKey, traderConfig.CustomAPIURL, traderConfig.CustomModelName)
+		if traderConfig.CustomAPIURL != "" || traderConfig.CustomModelName != "" {
+			log.Printf("🤖 [%s] 使用阿里云Qwen AI (自定义URL: %s, 模型: %s)", traderConfig.Name, traderConfig.CustomAPIURL, traderConfig.CustomModelName)
 		} else {
-			log.Printf("🤖 [%s] 使用阿里云Qwen AI", config.Name)
+			log.Printf("🤖 [%s] 使用阿里云Qwen AI", traderConfig.Name)
 		}
 	} else {
 		// 默认使用DeepSeek (支持自定义URL和Model)
-		mcpClient.SetDeepSeekAPIKey(config.DeepSeekKey, config.CustomAPIURL, config.CustomModelName)
-		if config.CustomAPIURL != "" || config.CustomModelName != "" {
-			log.Printf("🤖 [%s] 使用DeepSeek AI (自定义URL: %s, 模型: %s)", config.Name, config.CustomAPIURL, config.CustomModelName)
+		mcpClient.SetDeepSeekAPIKey(traderConfig.DeepSeekKey, traderConfig.CustomAPIURL, traderConfig.CustomModelName)
+		if traderConfig.CustomAPIURL != "" || traderConfig.CustomModelName != "" {
+			log.Printf("🤖 [%s] 使用DeepSeek AI (自定义URL: %s, 模型: %s)", traderConfig.Name, traderConfig.CustomAPIURL, traderConfig.CustomModelName)
 		} else {
-			log.Printf("🤖 [%s] 使用DeepSeek AI", config.Name)
+			log.Printf("🤖 [%s] 使用DeepSeek AI", traderConfig.Name)
 		}
 	}
 
 	// 初始化币种池API
-	if config.CoinPoolAPIURL != "" {
-		pool.SetCoinPoolAPI(config.CoinPoolAPIURL)
+	if traderConfig.CoinPoolAPIURL != "" {
+		pool.SetCoinPoolAPI(traderConfig.CoinPoolAPIURL)
 	}
 
 	// 设置默认交易平台
-	if config.Exchange == "" {
-		config.Exchange = "binance"
+	if traderConfig.Exchange == "" {
+		traderConfig.Exchange = "binance"
 	}
 
 	// 根据配置创建对应的交易器
@@ -176,60 +176,65 @@ func NewAutoTrader(config AutoTraderConfig, database interface{}, userID string)
 
 	// 记录仓位模式（通用）
 	marginModeStr := "全仓"
-	if !config.IsCrossMargin {
+	if !traderConfig.IsCrossMargin {
 		marginModeStr = "逐仓"
 	}
-	log.Printf("📊 [%s] 仓位模式: %s", config.Name, marginModeStr)
+	log.Printf("📊 [%s] 仓位模式: %s", traderConfig.Name, marginModeStr)
 
-	switch config.Exchange {
+	switch traderConfig.Exchange {
 	case "binance":
-		log.Printf("🏦 [%s] 使用币安合约交易", config.Name)
-		trader = NewFuturesTrader(config.BinanceAPIKey, config.BinanceSecretKey, userID)
+		log.Printf("🏦 [%s] 使用币安合约交易", traderConfig.Name)
+		trader = NewFuturesTrader(traderConfig.BinanceAPIKey, traderConfig.BinanceSecretKey, userID)
 	case "hyperliquid":
-		log.Printf("🏦 [%s] 使用Hyperliquid交易", config.Name)
-		trader, err = NewHyperliquidTrader(config.HyperliquidPrivateKey, config.HyperliquidWalletAddr, config.HyperliquidTestnet)
+		log.Printf("🏦 [%s] 使用Hyperliquid交易", traderConfig.Name)
+		trader, err = NewHyperliquidTrader(traderConfig.HyperliquidPrivateKey, traderConfig.HyperliquidWalletAddr, traderConfig.HyperliquidTestnet)
 		if err != nil {
 			return nil, fmt.Errorf("初始化Hyperliquid交易器失败: %w", err)
 		}
 	case "aster":
-		log.Printf("🏦 [%s] 使用Aster交易", config.Name)
-		trader, err = NewAsterTrader(config.AsterUser, config.AsterSigner, config.AsterPrivateKey)
+		log.Printf("🏦 [%s] 使用Aster交易", traderConfig.Name)
+		trader, err = NewAsterTrader(traderConfig.AsterUser, traderConfig.AsterSigner, traderConfig.AsterPrivateKey)
 		if err != nil {
 			return nil, fmt.Errorf("初始化Aster交易器失败: %w", err)
 		}
 	default:
-		return nil, fmt.Errorf("不支持的交易平台: %s", config.Exchange)
+		return nil, fmt.Errorf("不支持的交易平台: %s", traderConfig.Exchange)
 	}
 
 	// 验证初始金额配置
-	if config.InitialBalance <= 0 {
+	if traderConfig.InitialBalance <= 0 {
 		return nil, fmt.Errorf("初始金额必须大于0，请在配置中设置InitialBalance")
 	}
 
 	// 初始化决策日志记录器（使用trader ID创建独立目录）
-	logDir := fmt.Sprintf("decision_logs/%s", config.ID)
+	logDir := fmt.Sprintf("decision_logs/%s", traderConfig.ID)
 	decisionLogger := logger.NewDecisionLogger(logDir)
+	if db, ok := database.(config.DatabaseInterface); ok {
+		decisionLogger.SetDatabase(db, traderConfig.ID)
+	} else {
+		log.Printf("⚠️ 传入的数据库接口类型不匹配 config.DatabaseInterface，决策日志将仅写入文件")
+	}
 
 	// 设置默认系统提示词模板
-	systemPromptTemplate := config.SystemPromptTemplate
+	systemPromptTemplate := traderConfig.SystemPromptTemplate
 	if systemPromptTemplate == "" {
 		// feature/partial-close-dynamic-tpsl 分支默认使用 adaptive（支持动态止盈止损）
 		systemPromptTemplate = "adaptive"
 	}
 
 	return &AutoTrader{
-		id:                    config.ID,
-		name:                  config.Name,
-		aiModel:               config.AIModel,
-		exchange:              config.Exchange,
-		config:                config,
+		id:                    traderConfig.ID,
+		name:                  traderConfig.Name,
+		aiModel:               traderConfig.AIModel,
+		exchange:              traderConfig.Exchange,
+		config:                traderConfig,
 		trader:                trader,
 		mcpClient:             mcpClient,
 		decisionLogger:        decisionLogger,
-		initialBalance:        config.InitialBalance,
+		initialBalance:        traderConfig.InitialBalance,
 		systemPromptTemplate:  systemPromptTemplate,
-		defaultCoins:          config.DefaultCoins,
-		tradingCoins:          config.TradingCoins,
+		defaultCoins:          traderConfig.DefaultCoins,
+		tradingCoins:          traderConfig.TradingCoins,
 		lastResetTime:         time.Now(),
 		startTime:             time.Now(),
 		callCount:             0,
@@ -764,9 +769,14 @@ func (at *AutoTrader) detectAutoClosures() {
 				wasStopLoss = true
 			}
 
-			// 更新数据库记录
+			// 更新数据库记录（使用 close_time IS NULL 防止与手动平仓产生竞态条件）
 			if err := db.UpdateTradeClose(at.id, trade.Symbol, trade.Side, time.Now(), marketData.CurrentPrice, pnl, pnlPct, closeReason, 0, wasStopLoss); err != nil {
-				log.Printf("⚠️ 更新自动平仓记录失败: %v", err)
+				// 如果更新失败，可能是记录已被手动平仓更新（竞态条件），这是正常的
+				if strings.Contains(err.Error(), "未找到未平仓的交易记录") {
+					log.Printf("ℹ️ 交易记录可能已被手动平仓更新: %s %s", trade.Symbol, trade.Side)
+				} else {
+					log.Printf("⚠️ 更新自动平仓记录失败: %v", err)
+				}
 			} else {
 				log.Printf("✓ 自动平仓记录已更新: %s %s | %s | PnL: %.2f USDT (%.2f%%)",
 					trade.Symbol, trade.Side, closeReason, pnl, pnlPct)
@@ -1326,15 +1336,22 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *decision.Decision, ac
 						pnlPct = (pnl / marginUsed) * 100
 					}
 
-					// 更新数据库
+					// 更新数据库（使用 close_time IS NULL 防止竞态条件）
 					if err := db.UpdateTradeClose(at.id, decision.Symbol, "long", time.Now(), marketData.CurrentPrice, pnl, pnlPct, "manual", orderIDClose, false); err != nil {
-						log.Printf("  ⚠️ 更新交易记录失败: %v", err)
+						// 如果更新失败，可能是记录已被自动平仓更新（竞态条件），这是正常的
+						if strings.Contains(err.Error(), "未找到未平仓的交易记录") {
+							log.Printf("  ℹ️ 交易记录可能已被自动平仓更新（止盈/止损触发）")
+						} else {
+							log.Printf("  ⚠️ 更新交易记录失败: %v", err)
+						}
 					} else {
 						log.Printf("  ✓ 交易记录已更新到数据库 (PnL: %.2f USDT, %.2f%%)", pnl, pnlPct)
 					}
 					break
 				}
 			}
+		} else {
+			log.Printf("  ⚠️ 获取未平仓交易记录失败: %v", err)
 		}
 	}
 
@@ -1384,15 +1401,22 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *decision.Decision, a
 						pnlPct = (pnl / marginUsed) * 100
 					}
 
-					// 更新数据库
+					// 更新数据库（使用 close_time IS NULL 防止竞态条件）
 					if err := db.UpdateTradeClose(at.id, decision.Symbol, "short", time.Now(), marketData.CurrentPrice, pnl, pnlPct, "manual", orderIDClose, false); err != nil {
-						log.Printf("  ⚠️ 更新交易记录失败: %v", err)
+						// 如果更新失败，可能是记录已被自动平仓更新（竞态条件），这是正常的
+						if strings.Contains(err.Error(), "未找到未平仓的交易记录") {
+							log.Printf("  ℹ️ 交易记录可能已被自动平仓更新（止盈/止损触发）")
+						} else {
+							log.Printf("  ⚠️ 更新交易记录失败: %v", err)
+						}
 					} else {
 						log.Printf("  ✓ 交易记录已更新到数据库 (PnL: %.2f USDT, %.2f%%)", pnl, pnlPct)
 					}
 					break
 				}
 			}
+		} else {
+			log.Printf("  ⚠️ 获取未平仓交易记录失败: %v", err)
 		}
 	}
 
