@@ -12,6 +12,7 @@ import (
 	"nofx/crypto"
 	"nofx/decision"
 	"nofx/hook"
+	"nofx/logger"
 	"nofx/manager"
 	"nofx/trader"
 	"strconv"
@@ -1479,7 +1480,7 @@ func (s *Server) handlePositions(c *gin.Context) {
 	c.JSON(http.StatusOK, positions)
 }
 
-// handleDecisions 决策日志列表
+// handleDecisions 决策日志列表（支持分页和过滤）
 func (s *Server) handleDecisions(c *gin.Context) {
 	_, traderID, err := s.getTraderFromQuery(c)
 	if err != nil {
@@ -1487,14 +1488,26 @@ func (s *Server) handleDecisions(c *gin.Context) {
 		return
 	}
 
-	trader, err := s.traderManager.GetTrader(traderID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-		return
+	// 获取分页参数
+	page := 1
+	if pageStr := c.Query("page"); pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
 	}
 
-	// 获取所有历史决策记录（无限制）
-	records, err := trader.GetDecisionLogger().GetLatestRecords(10000)
+	pageSize := 50
+	if pageSizeStr := c.Query("page_size"); pageSizeStr != "" {
+		if ps, err := strconv.Atoi(pageSizeStr); err == nil && ps > 0 && ps <= 200 {
+			pageSize = ps
+		}
+	}
+
+	// 获取过滤参数
+	actionFilter := c.DefaultQuery("action_filter", "all")
+
+	// 从数据库获取数据（支持分页和过滤）
+	logs, totalCount, err := s.database.GetDecisionLogsWithPagination(traderID, page, pageSize, actionFilter)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("获取决策日志失败: %v", err),
@@ -1502,7 +1515,74 @@ func (s *Server) handleDecisions(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, records)
+	// 将 DecisionLog 转换为 DecisionRecord（用于前端）
+	records := make([]*logger.DecisionRecord, 0, len(logs))
+	for _, log := range logs {
+		record, err := convertDecisionLogToRecord(log)
+		if err != nil {
+			// 跳过转换失败的记录
+			continue
+		}
+		records = append(records, record)
+	}
+
+	// 返回分页结果
+	c.JSON(http.StatusOK, gin.H{
+		"data":        records,
+		"total":       totalCount,
+		"page":        page,
+		"page_size":   pageSize,
+		"total_pages": (totalCount + pageSize - 1) / pageSize,
+	})
+}
+
+// convertDecisionLogToRecord 将数据库的 DecisionLog 转换为 logger.DecisionRecord
+func convertDecisionLogToRecord(log *config.DecisionLog) (*logger.DecisionRecord, error) {
+	record := &logger.DecisionRecord{
+		Timestamp:           log.Timestamp,
+		CycleNumber:         log.CycleNumber,
+		SystemPrompt:        log.SystemPrompt,
+		InputPrompt:         log.InputPrompt,
+		CoTTrace:            log.CoTTrace,
+		DecisionJSON:        log.DecisionJSON,
+		Success:             log.Success,
+		ErrorMessage:        log.Error,
+		AIRequestDurationMs: log.AIRequestDurationMs,
+	}
+
+	// 解析 AccountState
+	if log.AccountState != "" {
+		if err := json.Unmarshal([]byte(log.AccountState), &record.AccountState); err != nil {
+			// 如果解析失败，使用空值
+			record.AccountState = logger.AccountSnapshot{}
+		}
+	}
+
+	// 解析 Positions
+	if log.Positions != "" {
+		if err := json.Unmarshal([]byte(log.Positions), &record.Positions); err != nil {
+			record.Positions = []logger.PositionSnapshot{}
+		}
+	}
+
+	// 解析 ExecutionLog
+	if log.ExecutionLog != "" {
+		if err := json.Unmarshal([]byte(log.ExecutionLog), &record.ExecutionLog); err != nil {
+			record.ExecutionLog = []string{}
+		}
+	}
+
+	// 解析 Decisions
+	if log.DecisionJSON != "" {
+		var decisionData struct {
+			Decisions []logger.DecisionAction `json:"decisions"`
+		}
+		if err := json.Unmarshal([]byte(log.DecisionJSON), &decisionData); err == nil {
+			record.Decisions = decisionData.Decisions
+		}
+	}
+
+	return record, nil
 }
 
 // handleLatestDecisions 最新决策日志（最近5条，最新的在前）
@@ -1519,10 +1599,10 @@ func (s *Server) handleLatestDecisions(c *gin.Context) {
 		return
 	}
 
-	// 从 query 参数读取 limit，默认 5，最大 50
-	limit := 5
+	// 从 query 参数读取 limit，默认 50，最大 200
+	limit := 50
 	if limitStr := c.Query("limit"); limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 50 {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 200 {
 			limit = l
 		}
 	}
@@ -1707,7 +1787,7 @@ func (s *Server) handlePerformance(c *gin.Context) {
 	c.JSON(http.StatusOK, performance)
 }
 
-// handleGetTrades 获取交易历史记录
+// handleGetTrades 获取交易历史记录（支持分页）
 func (s *Server) handleGetTrades(c *gin.Context) {
 	_, traderID, err := s.getTraderFromQuery(c)
 	if err != nil {
@@ -1715,18 +1795,46 @@ func (s *Server) handleGetTrades(c *gin.Context) {
 		return
 	}
 
-	limit := 50
-	if l, err := strconv.Atoi(c.Query("limit")); err == nil && l > 0 && l <= 200 {
-		limit = l
+	// 获取分页参数
+	page := 1
+	if pageStr := c.Query("page"); pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
 	}
 
-	trades, err := s.database.GetTradesByTrader(traderID, limit)
+	pageSize := 50
+	if pageSizeStr := c.Query("page_size"); pageSizeStr != "" {
+		if ps, err := strconv.Atoi(pageSizeStr); err == nil && ps > 0 && ps <= 200 {
+			pageSize = ps
+		}
+	}
+
+	// 兼容旧的 limit 参数（如果没有 page 和 page_size）
+	if c.Query("page") == "" && c.Query("page_size") == "" {
+		if limitStr := c.Query("limit"); limitStr != "" {
+			if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 200 {
+				pageSize = l
+			}
+		}
+	}
+
+	trades, totalCount, err := s.database.GetTradesByTraderWithPagination(traderID, page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("获取交易记录失败: %v", err)})
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("获取交易记录失败: %v", err),
+		})
 		return
 	}
 
-	c.JSON(http.StatusOK, trades)
+	// 返回分页结果
+	c.JSON(http.StatusOK, gin.H{
+		"data":        trades,
+		"total":       totalCount,
+		"page":        page,
+		"page_size":   pageSize,
+		"total_pages": (totalCount + pageSize - 1) / pageSize,
+	})
 }
 
 // authMiddleware JWT认证中间件

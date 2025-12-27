@@ -1,6 +1,9 @@
 import {
     Brain,
     Check,
+    ChevronLeft,
+    ChevronRight,
+    Filter,
     Inbox,
     Send,
     X,
@@ -18,18 +21,26 @@ interface DecisionLogsProps {
     traderId: string
 }
 
+type ActionFilter = 'all' | 'has_trading' | 'wait_only' | 'open_only' | 'close_only'
+
 export default function DecisionLogs({ traderId }: DecisionLogsProps) {
     const { language } = useLanguage()
-    const [limit, setLimit] = useState<number>(50)
+    const [page, setPage] = useState<number>(1)
+    const [pageSize, setPageSize] = useState<number>(50)
+    const [actionFilter, setActionFilter] = useState<ActionFilter>('all')
 
-    const { data: decisions, error, isLoading } = useSWR<DecisionRecord[]>(
-        traderId ? `decisions-all-${traderId}-${limit}` : null,
-        () => api.getLatestDecisions(traderId, limit),
+    const { data: response, error, isLoading } = useSWR(
+        traderId ? `decisions-${traderId}-${page}-${pageSize}-${actionFilter}` : null,
+        () => api.getDecisions(traderId, page, pageSize, actionFilter),
         {
             refreshInterval: 30000,
             revalidateOnFocus: false,
         }
     )
+
+    const decisions = response?.data || []
+    const total = response?.total || 0
+    const totalPages = response?.total_pages || 0
 
     if (isLoading) {
         return (
@@ -74,37 +85,154 @@ export default function DecisionLogs({ traderId }: DecisionLogsProps) {
         )
     }
 
+    if (decisions.length === 0 && !isLoading) {
+        return (
+            <div className="space-y-6">
+                {/* Header with filters */}
+                <div className="binance-card p-6">
+                    <div className="flex items-center justify-between flex-wrap gap-4">
+                        <h2
+                            className="text-xl font-bold flex items-center gap-2"
+                            style={{ color: '#EAECEF' }}
+                        >
+                            <Brain className="w-5 h-5" style={{ color: '#6366F1' }} />
+                            {t('decisionLogs', language)}
+                        </h2>
+                        <div className="flex items-center gap-4 flex-wrap">
+                            <div className="flex items-center gap-2">
+                                <Filter className="w-4 h-4" style={{ color: '#848E9C' }} />
+                                <span className="text-sm" style={{ color: '#848E9C' }}>
+                                    {t('filterByAction', language)}:
+                                </span>
+                                <select
+                                    value={actionFilter}
+                                    onChange={(e) => {
+                                        setActionFilter(e.target.value as ActionFilter)
+                                        setPage(1) // 重置到第一页
+                                    }}
+                                    className="rounded px-3 py-2 text-sm font-medium cursor-pointer transition-colors"
+                                    style={{
+                                        background: '#1E2329',
+                                        border: '1px solid #2B3139',
+                                        color: '#EAECEF',
+                                    }}
+                                >
+                                    <option value="all">{t('filterAll', language)}</option>
+                                    <option value="has_trading">{t('filterHasTrading', language)}</option>
+                                    <option value="wait_only">{t('filterWaitOnly', language)}</option>
+                                    <option value="open_only">{t('filterOpenOnly', language)}</option>
+                                    <option value="close_only">{t('filterCloseOnly', language)}</option>
+                                </select>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <span className="text-sm" style={{ color: '#848E9C' }}>
+                                    {t('pageSize', language)}:
+                                </span>
+                                <select
+                                    value={pageSize}
+                                    onChange={(e) => {
+                                        setPageSize(parseInt(e.target.value, 10))
+                                        setPage(1) // 重置到第一页
+                                    }}
+                                    className="rounded px-3 py-2 text-sm font-medium cursor-pointer transition-colors"
+                                    style={{
+                                        background: '#1E2329',
+                                        border: '1px solid #2B3139',
+                                        color: '#EAECEF',
+                                    }}
+                                >
+                                    <option value={20}>20</option>
+                                    <option value={50}>50</option>
+                                    <option value={100}>100</option>
+                                    <option value={200}>200</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div className="binance-card p-6">
+                    <div className="text-center py-16" style={{ color: '#848E9C' }}>
+                        <div className="mb-4 opacity-50 flex justify-center">
+                            <Filter className="w-16 h-16" />
+                        </div>
+                        <div className="text-lg font-semibold mb-2">
+                            {t('noFilteredDecisions', language)}
+                        </div>
+                        <div className="text-sm">
+                            {t('tryDifferentFilter', language)}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        )
+    }
+
     return (
         <div className="space-y-6">
-            {/* Header with limit selector */}
+            {/* Header with filters */}
             <div className="binance-card p-6">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between flex-wrap gap-4">
                     <h2
                         className="text-xl font-bold flex items-center gap-2"
                         style={{ color: '#EAECEF' }}
                     >
                         <Brain className="w-5 h-5" style={{ color: '#6366F1' }} />
                         {t('decisionLogs', language)}
+                        {total > 0 && (
+                            <span className="text-sm font-normal ml-2" style={{ color: '#848E9C' }}>
+                                ({total} {t('total', language)})
+                            </span>
+                        )}
                     </h2>
-                    <div className="flex items-center gap-2">
-                        <span className="text-sm" style={{ color: '#848E9C' }}>
-                            {t('showCount', language)}:
-                        </span>
-                        <select
-                            value={limit}
-                            onChange={(e) => setLimit(parseInt(e.target.value, 10))}
-                            className="rounded px-3 py-2 text-sm font-medium cursor-pointer transition-colors"
-                            style={{
-                                background: '#1E2329',
-                                border: '1px solid #2B3139',
-                                color: '#EAECEF',
-                            }}
-                        >
-                            <option value={20}>20</option>
-                            <option value={50}>50</option>
-                            <option value={100}>100</option>
-                            <option value={200}>200</option>
-                        </select>
+                    <div className="flex items-center gap-4 flex-wrap">
+                        <div className="flex items-center gap-2">
+                            <Filter className="w-4 h-4" style={{ color: '#848E9C' }} />
+                            <span className="text-sm" style={{ color: '#848E9C' }}>
+                                {t('filterByAction', language)}:
+                            </span>
+                            <select
+                                value={actionFilter}
+                                onChange={(e) => {
+                                    setActionFilter(e.target.value as ActionFilter)
+                                    setPage(1) // 重置到第一页
+                                }}
+                                className="rounded px-3 py-2 text-sm font-medium cursor-pointer transition-colors"
+                                style={{
+                                    background: '#1E2329',
+                                    border: '1px solid #2B3139',
+                                    color: '#EAECEF',
+                                }}
+                            >
+                                <option value="all">{t('filterAll', language)}</option>
+                                <option value="has_trading">{t('filterHasTrading', language)}</option>
+                                <option value="wait_only">{t('filterWaitOnly', language)}</option>
+                                <option value="open_only">{t('filterOpenOnly', language)}</option>
+                                <option value="close_only">{t('filterCloseOnly', language)}</option>
+                            </select>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <span className="text-sm" style={{ color: '#848E9C' }}>
+                                {t('pageSize', language)}:
+                            </span>
+                            <select
+                                value={pageSize}
+                                onChange={(e) => {
+                                    setPageSize(parseInt(e.target.value, 10))
+                                    setPage(1) // 重置到第一页
+                                }}
+                                className="rounded px-3 py-2 text-sm font-medium cursor-pointer transition-colors"
+                                style={{
+                                    background: '#1E2329',
+                                    border: '1px solid #2B3139',
+                                    color: '#EAECEF',
+                                }}
+                            >
+                                <option value={20}>20</option>
+                                <option value={50}>50</option>
+                                <option value={100}>100</option>
+                                <option value={200}>200</option>
+                            </select>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -119,6 +247,43 @@ export default function DecisionLogs({ traderId }: DecisionLogsProps) {
                     />
                 ))}
             </div>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+                <div className="binance-card p-6">
+                    <div className="flex items-center justify-between">
+                        <div className="text-sm" style={{ color: '#848E9C' }}>
+                            {t('page', language)} {page} / {totalPages} ({total} {t('total', language)})
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <button
+                                onClick={() => setPage(Math.max(1, page - 1))}
+                                disabled={page === 1}
+                                className="px-3 py-2 rounded text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                style={{
+                                    background: page === 1 ? '#1E2329' : '#2B3139',
+                                    border: '1px solid #2B3139',
+                                    color: '#EAECEF',
+                                }}
+                            >
+                                <ChevronLeft className="w-4 h-4 inline" /> {t('previous', language)}
+                            </button>
+                            <button
+                                onClick={() => setPage(Math.min(totalPages, page + 1))}
+                                disabled={page === totalPages}
+                                className="px-3 py-2 rounded text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                style={{
+                                    background: page === totalPages ? '#1E2329' : '#2B3139',
+                                    border: '1px solid #2B3139',
+                                    color: '#EAECEF',
+                                }}
+                            >
+                                {t('next', language)} <ChevronRight className="w-4 h-4 inline" />
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     )
 }

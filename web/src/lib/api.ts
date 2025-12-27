@@ -306,16 +306,6 @@ export const api = {
     return res.json()
   },
 
-  // 获取决策日志（支持trader_id）
-  async getDecisions(traderId?: string): Promise<DecisionRecord[]> {
-    const url = traderId
-      ? `${API_BASE}/decisions?trader_id=${traderId}`
-      : `${API_BASE}/decisions`
-    const res = await httpClient.get(url, getAuthHeaders())
-    if (!res.ok) throw new Error('获取决策日志失败')
-    return res.json()
-  },
-
   // 获取最新决策（支持trader_id和limit参数）
   async getLatestDecisions(
     traderId?: string,
@@ -332,6 +322,33 @@ export const api = {
       getAuthHeaders()
     )
     if (!res.ok) throw new Error('获取最新决策失败')
+    return res.json()
+  },
+
+  // 获取决策日志（支持分页和过滤）
+  async getDecisions(
+    traderId: string,
+    page: number = 1,
+    pageSize: number = 50,
+    actionFilter: string = 'all'
+  ): Promise<{
+    data: DecisionRecord[]
+    total: number
+    page: number
+    page_size: number
+    total_pages: number
+  }> {
+    const params = new URLSearchParams()
+    params.append('trader_id', traderId)
+    params.append('page', page.toString())
+    params.append('page_size', pageSize.toString())
+    params.append('action_filter', actionFilter)
+
+    const res = await httpClient.get(
+      `${API_BASE}/decisions?${params}`,
+      getAuthHeaders()
+    )
+    if (!res.ok) throw new Error('获取决策日志失败')
     return res.json()
   },
 
@@ -433,13 +450,22 @@ export const api = {
     return res.json()
   },
 
-  // 获取交易历史记录（支持trader_id和limit参数）
-  async getTrades(traderId?: string, limit: number = 50): Promise<TradeRecord[]> {
+  // 获取交易历史记录（支持分页）
+  async getTrades(
+    traderId: string,
+    page: number = 1,
+    pageSize: number = 50
+  ): Promise<{
+    data: TradeRecord[]
+    total: number
+    page: number
+    page_size: number
+    total_pages: number
+  }> {
     const params = new URLSearchParams()
-    if (traderId) {
-      params.append('trader_id', traderId)
-    }
-    params.append('limit', limit.toString())
+    params.append('trader_id', traderId)
+    params.append('page', page.toString())
+    params.append('page_size', pageSize.toString())
 
     const res = await httpClient.get(
       `${API_BASE}/trades?${params}`,

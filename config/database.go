@@ -56,10 +56,12 @@ type DatabaseInterface interface {
 	UpdateTradeClose(traderID, symbol, side string, closeTime time.Time, closePrice, pnl, pnlPct float64, closeReason string, orderIDClose int64, wasStopLoss bool) error
 	GetOpenTrades(traderID string) ([]*TradeRecord, error)
 	GetTradesByTrader(traderID string, limit int) ([]*TradeRecord, error)
+	GetTradesByTraderWithPagination(traderID string, page, pageSize int) ([]*TradeRecord, int, error) // 返回交易列表和总数
 	GetTradesBySymbol(traderID, symbol string, limit int) ([]*TradeRecord, error)
 	// 决策日志相关方法
 	CreateDecisionLog(log *DecisionLog) error
 	GetDecisionLogs(traderID string, limit int) ([]*DecisionLog, error)
+	GetDecisionLogsWithPagination(traderID string, page, pageSize int, actionFilter string) ([]*DecisionLog, int, error) // 返回日志列表和总数
 	Close() error
 }
 
