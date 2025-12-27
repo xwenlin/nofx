@@ -66,23 +66,34 @@ func (d *Database) GetDecisionLogsWithPagination(traderID string, page, pageSize
 	} else {
 		for _, log := range allLogs {
 			// 解析 decision_json 来检查动作类型
-			var decisionData struct {
-				Decisions []struct {
-					Action string `json:"action"`
-				} `json:"decisions"`
+			// DecisionJSON 存储的是 Decision[] 数组格式，不是 {"decisions": [...]} 格式
+			var decisions []struct {
+				Action string `json:"action"`
 			}
-			if err := json.Unmarshal([]byte(log.DecisionJSON), &decisionData); err != nil {
-				// 如果解析失败，跳过这个日志
-				continue
+
+			// 尝试解析为数组格式
+			if err := json.Unmarshal([]byte(log.DecisionJSON), &decisions); err != nil {
+				// 如果解析失败，尝试解析为对象格式（兼容旧数据）
+				var decisionData struct {
+					Decisions []struct {
+						Action string `json:"action"`
+					} `json:"decisions"`
+				}
+				if err2 := json.Unmarshal([]byte(log.DecisionJSON), &decisionData); err2 != nil {
+					// 两种格式都解析失败，跳过这个日志
+					continue
+				} else {
+					decisions = decisionData.Decisions
+				}
 			}
 
 			hasWait := false
 			hasOpen := false
 			hasClose := false
 
-			for _, decision := range decisionData.Decisions {
+			for _, decision := range decisions {
 				action := strings.ToLower(decision.Action)
-				if strings.Contains(action, "wait") {
+				if strings.Contains(action, "wait") || strings.Contains(action, "hold") {
 					hasWait = true
 				}
 				if strings.Contains(action, "open") {
