@@ -61,7 +61,7 @@ type DatabaseInterface interface {
 	// 决策日志相关方法
 	CreateDecisionLog(log *DecisionLog) error
 	GetDecisionLogs(traderID string, limit int) ([]*DecisionLog, error)
-	GetDecisionLogsWithPagination(traderID string, page, pageSize int, actionFilter string) ([]*DecisionLog, int, error) // 返回日志列表和总数
+	GetDecisionLogsWithPagination(traderID string, page, pageSize int, actionFilter string, statusFilter string) ([]*DecisionLog, int, error) // 返回日志列表和总数
 	Close() error
 }
 

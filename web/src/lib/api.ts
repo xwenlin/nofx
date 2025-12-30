@@ -330,7 +330,8 @@ export const api = {
     traderId: string,
     page: number = 1,
     pageSize: number = 50,
-    actionFilter: string = 'all'
+    actionFilter: string = 'all',
+    statusFilter: string = 'all'
   ): Promise<{
     data: DecisionRecord[]
     total: number
@@ -343,6 +344,9 @@ export const api = {
     params.append('page', page.toString())
     params.append('page_size', pageSize.toString())
     params.append('action_filter', actionFilter)
+    if (statusFilter !== 'all') {
+      params.append('status_filter', statusFilter)
+    }
 
     const res = await httpClient.get(
       `${API_BASE}/decisions?${params}`,

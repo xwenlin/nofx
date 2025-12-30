@@ -215,8 +215,8 @@ func (l *DecisionLogger) GetRecordByDate(date time.Time) ([]*DecisionRecord, err
 		if logEntry.Timestamp.After(startTime) && logEntry.Timestamp.Before(endTime) {
 			var record DecisionRecord
 			if err := json.Unmarshal([]byte(logEntry.Content), &record); err != nil {
-				continue
-			}
+			continue
+		}
 			records = append(records, &record)
 		}
 	}
@@ -370,7 +370,7 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int, database interfa
 	if database == nil || traderID == "" {
 		return nil, fmt.Errorf("数据库未配置，无法分析交易表现")
 	}
-	return l.analyzePerformanceFromDB(database, traderID)
+		return l.analyzePerformanceFromDB(database, traderID)
 }
 
 // analyzePerformanceFromDB 从数据库分析交易表现

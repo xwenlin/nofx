@@ -1505,9 +1505,10 @@ func (s *Server) handleDecisions(c *gin.Context) {
 
 	// 获取过滤参数
 	actionFilter := c.DefaultQuery("action_filter", "all")
+	statusFilter := c.DefaultQuery("status_filter", "all")
 
 	// 从数据库获取数据（支持分页和过滤）
-	logs, totalCount, err := s.database.GetDecisionLogsWithPagination(traderID, page, pageSize, actionFilter)
+	logs, totalCount, err := s.database.GetDecisionLogsWithPagination(traderID, page, pageSize, actionFilter, statusFilter)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("获取决策日志失败: %v", err),
@@ -1573,12 +1574,44 @@ func convertDecisionLogToRecord(log *config.DecisionLog) (*logger.DecisionRecord
 	}
 
 	// 解析 Decisions
-	if log.DecisionJSON != "" {
-		var decisionData struct {
-			Decisions []logger.DecisionAction `json:"decisions"`
+	// 优先从 Content 字段解析完整记录（包含正确的 Success 字段）
+	if log.Content != "" {
+		var fullRecord logger.DecisionRecord
+		if err := json.Unmarshal([]byte(log.Content), &fullRecord); err == nil {
+			// 如果 Content 解析成功，使用其中的 Decisions（包含正确的 Success 字段）
+			record.Decisions = fullRecord.Decisions
+		} else {
+			// 如果 Content 解析失败，回退到从 DecisionJSON 解析
+			if log.DecisionJSON != "" {
+				var decisions []logger.DecisionAction
+				// 尝试解析为数组格式（正确格式）
+				if err := json.Unmarshal([]byte(log.DecisionJSON), &decisions); err == nil {
+					record.Decisions = decisions
+				} else {
+					// 如果解析失败，尝试解析为对象格式（兼容旧数据）
+					var decisionData struct {
+						Decisions []logger.DecisionAction `json:"decisions"`
+					}
+					if err2 := json.Unmarshal([]byte(log.DecisionJSON), &decisionData); err2 == nil {
+						record.Decisions = decisionData.Decisions
+					}
+				}
+			}
 		}
-		if err := json.Unmarshal([]byte(log.DecisionJSON), &decisionData); err == nil {
-			record.Decisions = decisionData.Decisions
+	} else if log.DecisionJSON != "" {
+		// 如果 Content 不存在，从 DecisionJSON 解析
+		var decisions []logger.DecisionAction
+		// 尝试解析为数组格式（正确格式）
+		if err := json.Unmarshal([]byte(log.DecisionJSON), &decisions); err == nil {
+			record.Decisions = decisions
+		} else {
+			// 如果解析失败，尝试解析为对象格式（兼容旧数据）
+			var decisionData struct {
+				Decisions []logger.DecisionAction `json:"decisions"`
+			}
+			if err2 := json.Unmarshal([]byte(log.DecisionJSON), &decisionData); err2 == nil {
+				record.Decisions = decisionData.Decisions
+			}
 		}
 	}
 
