@@ -4,6 +4,7 @@ import {
     ChevronLeft,
     ChevronRight,
     ChevronRight as ChevronRightIcon,
+    FileCode,
     Filter,
     Inbox,
     Send,
@@ -240,11 +241,11 @@ export default function DecisionLogs({ traderId }: DecisionLogsProps) {
             {renderHeader()}
 
             {/* 表格 + 侧边栏布局 */}
-            <div className="flex gap-6">
+            <div className="flex gap-6 items-stretch">
                 {/* 左侧：表格列表 */}
-                <div className={`flex-1 transition-all duration-300 ${selectedDecision ? 'mr-0' : ''}`}>
-                    <div className="binance-card overflow-hidden">
-                        <div className="overflow-x-auto">
+                <div className={`flex-1 transition-all duration-300 flex flex-col ${selectedDecision ? 'mr-0' : ''}`}>
+                    <div className="binance-card overflow-hidden flex flex-col flex-1">
+                        <div className="overflow-x-auto flex-1">
                             <table className="w-full" style={{ borderCollapse: 'separate', borderSpacing: 0 }}>
                                 <thead>
                                     <tr style={{ background: '#1E2329' }}>
@@ -355,7 +356,7 @@ export default function DecisionLogs({ traderId }: DecisionLogsProps) {
 
                 {/* 右侧：详情侧边栏 */}
                 {selectedDecision && (
-                    <div className="w-[768px] flex-shrink-0">
+                    <div className="w-[768px] flex-shrink-0 flex flex-col">
                         <DecisionSidebar
                             decision={selectedDecision}
                             language={language}
@@ -418,17 +419,30 @@ function DecisionSidebar({
     const [showInputPrompt, setShowInputPrompt] = useState(false)
     const [showCoT, setShowCoT] = useState(false)
     const [showExecutionLog, setShowExecutionLog] = useState(false)
+    const [showRawJSON, setShowRawJSON] = useState(false)
 
     return (
         <div
-            className="binance-card p-6 h-full overflow-y-auto"
-            style={{ maxHeight: 'calc(100vh - 300px)' }}
+            className="binance-card p-6 h-full flex flex-col overflow-y-auto flex-1"
         >
             {/* Header */}
             <div className="flex items-start justify-between mb-6">
                 <div className="flex-1">
-                    <div className="font-semibold text-lg mb-1" style={{ color: '#EAECEF' }}>
-                        {t('cycle', language)} #{decision.cycle_number}
+                    <div className="flex items-center justify-between mb-1">
+                        <div className="font-semibold text-lg" style={{ color: '#EAECEF' }}>
+                            {t('cycle', language)} #{decision.cycle_number}
+                        </div>
+                        {/* Status Badge */}
+                        <div
+                            className="px-3 py-1 rounded text-xs font-bold"
+                            style={
+                                decision.success
+                                    ? { background: 'rgba(14, 203, 129, 0.1)', color: '#0ECB81' }
+                                    : { background: 'rgba(246, 70, 93, 0.1)', color: '#F6465D' }
+                            }
+                        >
+                            {t(decision.success ? 'success' : 'failed', language)}
+                        </div>
                     </div>
                     <div className="text-sm" style={{ color: '#848E9C' }}>
                         {new Date(decision.timestamp).toLocaleString()}
@@ -441,20 +455,6 @@ function DecisionSidebar({
                 >
                     <X className="w-5 h-5" />
                 </button>
-            </div>
-
-            {/* Status Badge */}
-            <div className="mb-6">
-                <div
-                    className="px-3 py-1 rounded text-xs font-bold inline-block"
-                    style={
-                        decision.success
-                            ? { background: 'rgba(14, 203, 129, 0.1)', color: '#0ECB81' }
-                            : { background: 'rgba(246, 70, 93, 0.1)', color: '#F6465D' }
-                    }
-                >
-                    {t(decision.success ? 'success' : 'failed', language)}
-                </div>
             </div>
 
             {/* Input Prompt - Collapsible */}
@@ -515,6 +515,38 @@ function DecisionSidebar({
                             }}
                         >
                             {decision.cot_trace}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* Raw Decision JSON - Collapsible */}
+            {decision.decision_json && (
+                <div className="mb-6">
+                    <button
+                        onClick={() => setShowRawJSON(!showRawJSON)}
+                        className="flex items-center gap-2 text-sm transition-colors w-full text-left mb-2"
+                        style={{ color: '#848E9C' }}
+                    >
+                        <span className="font-semibold flex items-center gap-2">
+                            <FileCode className="w-4 h-4" /> {t('rawDecisionJSON', language)}
+                        </span>
+                        <span className="text-xs ml-auto">
+                            {showRawJSON
+                                ? t('collapse', language)
+                                : t('expand', language)}
+                        </span>
+                    </button>
+                    {showRawJSON && (
+                        <div
+                            className="rounded p-4 text-sm font-mono whitespace-pre-wrap max-h-96 overflow-y-auto"
+                            style={{
+                                background: '#0B0E11',
+                                border: '1px solid #2B3139',
+                                color: '#EAECEF',
+                            }}
+                        >
+                            {decision.decision_json}
                         </div>
                     )}
                 </div>

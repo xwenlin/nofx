@@ -53,16 +53,19 @@ type PositionSnapshot struct {
 
 // DecisionAction 决策动作
 type DecisionAction struct {
-	Action    string    `json:"action"`    // open_long, open_short, close_long, close_short, update_stop_loss, update_take_profit, partial_close
-	Symbol    string    `json:"symbol"`    // 币种
-	Quantity  float64   `json:"quantity"`  // 数量（部分平仓时使用）
-	Leverage  int       `json:"leverage"`  // 杠杆（开仓时）
-	Price     float64   `json:"price"`     // 执行价格
-	OrderID   int64     `json:"order_id"`  // 订单ID
-	Timestamp time.Time `json:"timestamp"` // 执行时间
-	Success   bool      `json:"success"`   // 是否成功
-	Error     string    `json:"error"`     // 错误信息
-	Reasoning string    `json:"reasoning"` // 决策原因（AI提供的reasoning）
+	Action        string    `json:"action"`                    // open_long, open_short, close_long, close_short, update_stop_loss, update_take_profit, partial_close
+	Symbol        string    `json:"symbol"`                    // 币种
+	Quantity      float64   `json:"quantity"`                  // 数量（部分平仓时使用）
+	Leverage      int       `json:"leverage"`                  // 杠杆（开仓时）
+	Price         float64   `json:"price"`                     // 执行价格
+	OrderID       int64     `json:"order_id"`                  // 订单ID
+	Timestamp     time.Time `json:"timestamp"`                 // 执行时间
+	Success       bool      `json:"success"`                   // 是否成功
+	Error         string    `json:"error"`                     // 错误信息
+	Reasoning     string    `json:"reasoning"`                 // 决策原因（AI提供的reasoning）
+	NewStopLoss   float64   `json:"new_stop_loss,omitempty"`   // 新止损价格（用于 update_stop_loss）
+	NewTakeProfit float64   `json:"new_take_profit,omitempty"` // 新止盈价格（用于 update_take_profit）
+	OldStopLoss   float64   `json:"old_stop_loss,omitempty"`   // 旧止损价格（用于 update_stop_loss，记录移动前的止损价）
 }
 
 // DecisionLogger 决策日志记录器
@@ -215,8 +218,8 @@ func (l *DecisionLogger) GetRecordByDate(date time.Time) ([]*DecisionRecord, err
 		if logEntry.Timestamp.After(startTime) && logEntry.Timestamp.Before(endTime) {
 			var record DecisionRecord
 			if err := json.Unmarshal([]byte(logEntry.Content), &record); err != nil {
-			continue
-		}
+				continue
+			}
 			records = append(records, &record)
 		}
 	}
@@ -370,7 +373,7 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int, database interfa
 	if database == nil || traderID == "" {
 		return nil, fmt.Errorf("数据库未配置，无法分析交易表现")
 	}
-		return l.analyzePerformanceFromDB(database, traderID)
+	return l.analyzePerformanceFromDB(database, traderID)
 }
 
 // analyzePerformanceFromDB 从数据库分析交易表现

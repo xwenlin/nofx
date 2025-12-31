@@ -126,11 +126,12 @@ type Decision struct {
 
 // FullDecision AI的完整决策（包含思维链）
 type FullDecision struct {
-	SystemPrompt string     `json:"system_prompt"` // 系统提示词（发送给AI的系统prompt）
-	UserPrompt   string     `json:"user_prompt"`   // 发送给AI的输入prompt
-	CoTTrace     string     `json:"cot_trace"`     // 思维链分析（AI输出）
-	Decisions    []Decision `json:"decisions"`     // 具体决策列表
-	Timestamp    time.Time  `json:"timestamp"`
+	SystemPrompt    string     `json:"system_prompt"`     // 系统提示词（发送给AI的系统prompt）
+	UserPrompt      string     `json:"user_prompt"`       // 发送给AI的输入prompt
+	CoTTrace        string     `json:"cot_trace"`         // 思维链分析（AI输出）
+	Decisions       []Decision `json:"decisions"`         // 具体决策列表（经过验证的）
+	RawDecisionJSON string     `json:"raw_decision_json"` // AI返回的原始决策JSON（未验证）
+	Timestamp       time.Time  `json:"timestamp"`
 	// AIRequestDurationMs 记录 AI API 调用耗时（毫秒）方便排查延迟问题
 	AIRequestDurationMs int64 `json:"ai_request_duration_ms,omitempty"`
 }
@@ -339,9 +340,9 @@ func buildSystemPrompt(templateName string) string {
 
 	// 2. 输出格式 - 动态生成
 	sb.WriteString("# 可用动作与输出格式\n\n")
-	sb.WriteString("## 可用动作\n")
+	sb.WriteString("**可用动作**\n")
 	sb.WriteString("open_long/open_short, close_long/close_short, wait/hold, update_stop_loss, update_take_profit\n\n")
-	sb.WriteString("## 输出格式（严格执行）\n")
+	sb.WriteString("**输出格式（严格执行）**\n")
 	sb.WriteString("```xml\n")
 	sb.WriteString("<reasoning>\n")
 	sb.WriteString("<!-- 四层框架分析 -->\n")
@@ -368,13 +369,13 @@ func buildSystemPrompt(templateName string) string {
 	sb.WriteString("        \"take_profit\": 107200,\n")
 	sb.WriteString("        \"confidence\": 85,\n")
 	sb.WriteString("        \"risk_usd\": 30,\n")
-	sb.WriteString("        \"reasoning\": \"四层框架共振，价格回调至布林带中轨支撑，盈亏比2.25:1符合要求\"\n")
+	sb.WriteString("        \"reasoning\": \"四层框架共振，...，盈亏比2.25符合要求\"\n")
 	sb.WriteString("    }\n")
 	sb.WriteString("]\n")
 	sb.WriteString("```\n")
 	sb.WriteString("</decision>\n")
 	sb.WriteString("```\n\n")
-	sb.WriteString("## 字段要求\n")
+	sb.WriteString("**字段要求**\n")
 	sb.WriteString("- 开仓时必填:leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning。\n")
 	sb.WriteString("- 更新止损时必填: new_stop_loss\n")
 	sb.WriteString("- 更新止盈时必填: new_take_profit\n")
@@ -713,8 +714,10 @@ func buildUserPrompt(ctx *Context) string {
 	sb.WriteString("- 最大持仓币种数: 3\n")
 	sb.WriteString(fmt.Sprintf("- 单币种最大杠杆: 山寨币 %dx | BTC/ETH %dx\n", ctx.AltcoinLeverage, ctx.BTCETHLeverage))
 	sb.WriteString("- 账户最大保证金使用率: 90%\n")
-	sb.WriteString("- 最小开仓名义价值: 10 USDT (交易所限制)\n")
-	sb.WriteString("- **说明**: 你下达的指令必须符合以上规则，否则将被执行层拒绝。\n")
+	sb.WriteString("- 最小开仓名义价值 (AI必须严格遵守):\n")
+	sb.WriteString("  - BTCUSDT, ETHUSDT: ≥ 60.00 USDT\n")
+	sb.WriteString("  - 其他所有山寨币: ≥ 12.00 USDT\n")
+	sb.WriteString("- **说明**: 你下达的指令必须符合以上规则，否则将被执行层拒绝。**特别注意**：计算出的`position_size_usd`必须大于或等于对应标的的最小开仓名义价值。\n")
 	sb.WriteString("\n")
 
 	// 标的币种数据
@@ -946,12 +949,13 @@ func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthL
 	// 1. 提取思维链
 	cotTrace := extractCoTTrace(aiResponse)
 
-	// 2. 提取JSON决策列表
-	decisions, err := extractDecisions(aiResponse)
+	// 2. 提取并验证JSON决策列表（同时获取原始JSON）
+	rawDecisionJSON, decisions, err := extractDecisions(aiResponse)
 	if err != nil {
 		return &FullDecision{
-			CoTTrace:  cotTrace,
-			Decisions: []Decision{},
+			CoTTrace:        cotTrace,
+			Decisions:       []Decision{},
+			RawDecisionJSON: rawDecisionJSON, // 即使验证失败，也保存原始JSON
 		}, fmt.Errorf("提取决策失败: %w", err)
 	}
 
@@ -961,14 +965,16 @@ func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthL
 	// 4. 验证决策
 	if err := validateDecisions(decisions, accountEquity, btcEthLeverage, altcoinLeverage); err != nil {
 		return &FullDecision{
-			CoTTrace:  cotTrace,
-			Decisions: decisions,
+			CoTTrace:        cotTrace,
+			Decisions:       decisions,
+			RawDecisionJSON: rawDecisionJSON, // 保存原始JSON
 		}, fmt.Errorf("决策验证失败: %w", err)
 	}
 
 	return &FullDecision{
-		CoTTrace:  cotTrace,
-		Decisions: decisions,
+		CoTTrace:        cotTrace,
+		Decisions:       decisions,
+		RawDecisionJSON: rawDecisionJSON, // 保存原始JSON
 	}, nil
 }
 
@@ -997,8 +1003,9 @@ func extractCoTTrace(response string) string {
 	return strings.TrimSpace(response)
 }
 
-// extractDecisions 提取JSON决策列表
-func extractDecisions(response string) ([]Decision, error) {
+// extractDecisions 提取JSON决策列表，同时返回原始JSON（用于保存AI原始输出）
+// 返回值: (原始JSON, 解析后的决策列表, 错误)
+func extractDecisions(response string) (string, []Decision, error) {
 	// 预清洗：去零宽/BOM
 	s := removeInvisibleRunes(response)
 	s = strings.TrimSpace(s)
@@ -1023,23 +1030,24 @@ func extractDecisions(response string) ([]Decision, error) {
 
 	// 1) 优先从 ```json 代码块中提取
 	if m := reJSONFence.FindStringSubmatch(jsonPart); m != nil && len(m) > 1 {
-		jsonContent := strings.TrimSpace(m[1])
+		rawJSON := strings.TrimSpace(m[1]) // 保存原始JSON（在验证和解析之前）
+		jsonContent := rawJSON
 		jsonContent = compactArrayOpen(jsonContent) // 把 "[ {" 规整为 "[{"
 		jsonContent = fixMissingQuotes(jsonContent) // 二次修复（防止 regex 提取后还有残留全角）
 		if err := validateJSONFormat(jsonContent); err != nil {
-			return nil, fmt.Errorf("JSON格式验证失败: %w\nJSON内容: %s\n完整响应:\n%s", err, jsonContent, response)
+			return rawJSON, nil, fmt.Errorf("JSON格式验证失败: %w\nJSON内容: %s\n完整响应:\n%s", err, jsonContent, response)
 		}
 		var decisions []Decision
 		if err := json.Unmarshal([]byte(jsonContent), &decisions); err != nil {
-			return nil, fmt.Errorf("JSON解析失败: %w\nJSON内容: %s", err, jsonContent)
+			return rawJSON, nil, fmt.Errorf("JSON解析失败: %w\nJSON内容: %s", err, jsonContent)
 		}
-		return decisions, nil
+		return rawJSON, decisions, nil
 	}
 
 	// 2) 退而求其次 (Fallback)：全文寻找首个对象数组
 	// 注意：此时 jsonPart 已经过 fixMissingQuotes()，全角字符已转换为半角
-	jsonContent := strings.TrimSpace(reJSONArray.FindString(jsonPart))
-	if jsonContent == "" {
+	rawJSON := strings.TrimSpace(reJSONArray.FindString(jsonPart))
+	if rawJSON == "" {
 		// 🔧 安全回退 (Safe Fallback)：当AI只输出思维链没有JSON时，生成保底决策（避免系统崩溃）
 		log.Printf("⚠️  [SafeFallback] AI未输出JSON决策，进入安全等待模式 (AI response without JSON, entering safe wait mode)")
 
@@ -1056,25 +1064,26 @@ func extractDecisions(response string) ([]Decision, error) {
 			Reasoning: fmt.Sprintf("模型未输出结构化JSON决策，进入安全等待；摘要：%s", cotSummary),
 		}
 
-		return []Decision{fallbackDecision}, nil
+		return "", []Decision{fallbackDecision}, nil
 	}
 
 	// 🔧 规整格式（此时全角字符已在前面修复过）
+	jsonContent := rawJSON
 	jsonContent = compactArrayOpen(jsonContent)
 	jsonContent = fixMissingQuotes(jsonContent) // 二次修复（防止 regex 提取后还有残留全角）
 
 	// 🔧 验证 JSON 格式（检测常见错误）
 	if err := validateJSONFormat(jsonContent); err != nil {
-		return nil, fmt.Errorf("JSON格式验证失败: %w\nJSON内容: %s\n完整响应:\n%s", err, jsonContent, response)
+		return rawJSON, nil, fmt.Errorf("JSON格式验证失败: %w\nJSON内容: %s\n完整响应:\n%s", err, jsonContent, response)
 	}
 
 	// 解析JSON
 	var decisions []Decision
 	if err := json.Unmarshal([]byte(jsonContent), &decisions); err != nil {
-		return nil, fmt.Errorf("JSON解析失败: %w\nJSON内容: %s", err, jsonContent)
+		return rawJSON, nil, fmt.Errorf("JSON解析失败: %w\nJSON内容: %s", err, jsonContent)
 	}
 
-	return decisions, nil
+	return rawJSON, decisions, nil
 }
 
 // fixMissingQuotes 替换中文引号和全角字符为英文引号和半角字符（避免AI输出全角JSON字符导致解析失败）
@@ -1119,9 +1128,14 @@ func validateJSONFormat(jsonStr string) error {
 		return fmt.Errorf("JSON 必须以 [{ 开头（允许空白），实际: %s", trimmed[:min(20, len(trimmed))])
 	}
 
-	// 检查是否包含范围符号 ~（LLM 常见错误）
-	if strings.Contains(jsonStr, "~") {
-		return fmt.Errorf("JSON 中不可包含范围符号 ~，所有数字必须是精确的单一值")
+	// 检查数字值中是否包含范围符号 ~（LLM 常见错误）
+	// 注意：只检查数字值，不检查字符串内容（reasoning 等字段可能包含 ~）
+	// 使用正则表达式匹配：在JSON值位置（冒号后、引号外）出现的 ~数字 或 数字~
+	// 模式：": ~数字" 或 ": 数字~" 或 ":~数字" 或 ":数字~"
+	// 排除字符串值中的 ~（字符串值在引号内）
+	reTildeInNumber := regexp.MustCompile(`:\s*~[\d.eE+-]+|:\s*[\d.eE+-]+~`)
+	if reTildeInNumber.MatchString(jsonStr) {
+		return fmt.Errorf("JSON 数字值中不可包含范围符号 ~，所有数字必须是精确的单一值")
 	}
 
 	// 检查是否包含千位分隔符（如 98,000）

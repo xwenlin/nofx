@@ -542,10 +542,16 @@ func (at *AutoTrader) runCycle() error {
 		record.SystemPrompt = decision.SystemPrompt // 保存系统提示词
 		record.InputPrompt = decision.UserPrompt
 		record.CoTTrace = decision.CoTTrace
-		if len(decision.Decisions) > 0 {
+		// 保存AI返回的原始决策JSON（无论验证是否通过）
+		if decision.RawDecisionJSON != "" {
+			record.DecisionJSON = decision.RawDecisionJSON
+		} else if len(decision.Decisions) > 0 {
+			// 如果没有原始JSON，则序列化验证后的决策（向后兼容）
 			decisionJSON, _ := json.MarshalIndent(decision.Decisions, "", "  ")
 			record.DecisionJSON = string(decisionJSON)
 		}
+		// 注意：这里不保存决策到 record.Decisions，因为如果 err != nil 会直接 return
+		// 如果 err == nil，会在后面的执行循环中保存（避免重复）
 	}
 
 	if err != nil {
@@ -628,14 +634,16 @@ func (at *AutoTrader) runCycle() error {
 	// 执行决策并记录结果
 	for _, d := range sortedDecisions {
 		actionRecord := logger.DecisionAction{
-			Action:    d.Action,
-			Symbol:    d.Symbol,
-			Quantity:  0,
-			Leverage:  d.Leverage,
-			Price:     0,
-			Timestamp: time.Now(),
-			Success:   false,
-			Reasoning: d.Reasoning, // 保存AI的决策原因
+			Action:        d.Action,
+			Symbol:        d.Symbol,
+			Quantity:      0,
+			Leverage:      d.Leverage,
+			Price:         0,
+			Timestamp:     time.Now(),
+			Success:       false,
+			Reasoning:     d.Reasoning,     // 保存AI的决策原因
+			NewStopLoss:   d.NewStopLoss,   // 保存新止损价格
+			NewTakeProfit: d.NewTakeProfit, // 保存新止盈价格
 		}
 
 		// 在执行前校验AI指令是否符合系统执行限制
@@ -1481,48 +1489,69 @@ func (at *AutoTrader) executeUpdateStopLossWithRecord(decision *decision.Decisio
 		return fmt.Errorf("无法获取 %s 的入场价", decision.Symbol)
 	}
 
-	// 验证新止损价格合理性
+	// 获取旧的止损价格（必须从持仓数据中获取）
+	var oldStopLoss float64
+	if sl, ok := targetPosition["stopLoss"].(float64); ok && sl > 0 {
+		oldStopLoss = sl
+		actionRecord.OldStopLoss = oldStopLoss
+	} else {
+		// 如果持仓数据中没有止损价格，尝试通过 API 获取
+		sl, err := at.trader.GetCurrentStopLoss(decision.Symbol, positionSide)
+		if err != nil {
+			log.Printf("  ⚠ 获取旧止损价格失败: %v", err)
+		} else if sl > 0 {
+			oldStopLoss = sl
+			actionRecord.OldStopLoss = oldStopLoss
+		}
+		// 如果 oldStopLoss 仍为 0，说明是首次设置止损，允许继续
+	}
+
+	// 验证新止损价格合理性 (移动止损)
 	currentPrice := marketData.CurrentPrice
 
 	if positionSide == "LONG" {
-		// 多仓止损逻辑：
-		// 1. 开仓时设置初始止损：止损价 < 入场价（限制初始亏损）
-		// 2. 持仓盈利后移动（上调）止损：新止损价 > 旧止损价，并且新止损价 >= 入场价（锁定已有利润）
-		// 3. 新止损必须 < 当前价格（否则会立即触发止损）
+		// 规则1：多仓移动止损后，新止损必须仍然低于当前价，否则立即触发
 		if decision.NewStopLoss >= currentPrice {
-			return fmt.Errorf("多仓止损价格不能高于或等于当前价格: 当前价格 %.2f, 新止损 %.2f", currentPrice, decision.NewStopLoss)
+			return fmt.Errorf("多仓止损不能高于或等于当前价: 当前价 %.2f, 新止损 %.2f", currentPrice, decision.NewStopLoss)
 		}
-		// 如果当前价格 > 入场价（盈利），允许新止损 >= 入场价（锁定利润）
-		// 如果当前价格 <= 入场价（亏损或持平），新止损应该 >= 入场价（限制亏损）
-		if currentPrice > entryPrice {
-			// 盈利状态：允许新止损 >= 入场价（锁定利润）
-			log.Printf("  ✅ 多仓止损调整至 %.2f (入场价: %.2f, 当前价格: %.2f, 盈利状态)", decision.NewStopLoss, entryPrice, currentPrice)
-		} else {
-			// 亏损或持平状态：新止损应该 >= 入场价（限制亏损）
-			if decision.NewStopLoss < entryPrice {
-				return fmt.Errorf("多仓止损价格不能低于入场价: 入场价 %.2f, 新止损 %.2f", entryPrice, decision.NewStopLoss)
+
+		// 规则2：根据移动方向，进行合理性提醒（非强制拒绝）
+		if oldStopLoss > 0 {
+			// 已有止损单，进行移动止损验证
+			if decision.NewStopLoss > oldStopLoss {
+				// 上移止损：收紧。这是最安全、最常见的操作。
+				log.Printf("  ✅ 多仓止损上移收紧: %.2f -> %.2f (入场价: %.2f)", oldStopLoss, decision.NewStopLoss, entryPrice)
+			} else if decision.NewStopLoss < oldStopLoss {
+				// 下移止损：放宽。需要警惕！但允许AI操作。
+				log.Printf("  ⚠️  多仓止损下移放宽: %.2f -> %.2f (入场价: %.2f) - 注意：扩大风险敞口", oldStopLoss, decision.NewStopLoss, entryPrice)
+			} else {
+				return fmt.Errorf("新止损价与旧止损价相同，无需更新")
 			}
-			log.Printf("  ✅ 多仓止损调整至 %.2f (入场价: %.2f, 当前价格: %.2f)", decision.NewStopLoss, entryPrice, currentPrice)
+		} else {
+			// 首次设置止损
+			log.Printf("  ✅ 多仓首次设置止损: %.2f (入场价: %.2f, 当前价格: %.2f)", decision.NewStopLoss, entryPrice, currentPrice)
 		}
+
 	} else if positionSide == "SHORT" {
-		// 空仓止损逻辑：
-		// 1. 开仓时设置初始止损：止损价 > 入场价（限制初始亏损）
-		// 2. 持仓盈利后移动（下调）止损：新止损价 < 旧止损价，并且新止损价 < 入场价（锁定已有利润）
-		// 3. 新止损必须 > 当前价格（否则会立即触发止损）
+		// 空仓镜像逻辑
 		if decision.NewStopLoss <= currentPrice {
-			return fmt.Errorf("空仓止损价格不能低于或等于当前价格: 当前价格 %.2f, 新止损 %.2f", currentPrice, decision.NewStopLoss)
+			return fmt.Errorf("空仓止损不能低于或等于当前价: 当前价 %.2f, 新止损 %.2f", currentPrice, decision.NewStopLoss)
 		}
-		// 如果当前价格 < 入场价（盈利），允许新止损 < 入场价（锁定利润）
-		// 如果当前价格 >= 入场价（亏损或持平），新止损应该 >= 入场价（限制亏损）
-		if currentPrice < entryPrice {
-			// 盈利状态：允许新止损 < 入场价（锁定利润）
-			log.Printf("  ✅ 空仓止损下调至 %.2f 锁定利润 (入场价: %.2f, 当前价格: %.2f, 盈利状态)", decision.NewStopLoss, entryPrice, currentPrice)
-		} else {
-			// 亏损或持平状态：新止损应该 >= 入场价（限制亏损）
-			if decision.NewStopLoss < entryPrice {
-				return fmt.Errorf("空仓止损价格不能低于入场价: 入场价 %.2f, 新止损 %.2f", entryPrice, decision.NewStopLoss)
+
+		if oldStopLoss > 0 {
+			// 已有止损单，进行移动止损验证
+			if decision.NewStopLoss < oldStopLoss {
+				// 下移止损：收紧。这是最安全、最常见的操作。
+				log.Printf("  ✅ 空仓止损下移收紧: %.2f -> %.2f (入场价: %.2f)", oldStopLoss, decision.NewStopLoss, entryPrice)
+			} else if decision.NewStopLoss > oldStopLoss {
+				// 上移止损：放宽。需要警惕！但允许AI操作。
+				log.Printf("  ⚠️  空仓止损上移放宽: %.2f -> %.2f (入场价: %.2f) - 注意：扩大风险敞口", oldStopLoss, decision.NewStopLoss, entryPrice)
+			} else {
+				return fmt.Errorf("新止损价与旧止损价相同，无需更新")
 			}
-			log.Printf("  ✅ 空仓止损调整至 %.2f (入场价: %.2f, 当前价格: %.2f)", decision.NewStopLoss, entryPrice, currentPrice)
+		} else {
+			// 首次设置止损
+			log.Printf("  ✅ 空仓首次设置止损: %.2f (入场价: %.2f, 当前价格: %.2f)", decision.NewStopLoss, entryPrice, currentPrice)
 		}
 	}
 
@@ -1601,12 +1630,75 @@ func (at *AutoTrader) executeUpdateTakeProfitWithRecord(decision *decision.Decis
 	positionSide := strings.ToUpper(side)
 	positionAmt, _ := targetPosition["positionAmt"].(float64)
 
-	// 验证新止盈价格合理性
-	if positionSide == "LONG" && decision.NewTakeProfit <= marketData.CurrentPrice {
-		return fmt.Errorf("多单止盈必须高于当前价格 (当前: %.2f, 新止盈: %.2f)", marketData.CurrentPrice, decision.NewTakeProfit)
+	// 获取入场价（用于日志显示）
+	var entryPrice float64
+	if ep, ok := targetPosition["entryPrice"].(float64); ok {
+		entryPrice = ep
+	} else if epStr, ok := targetPosition["entryPrice"].(string); ok {
+		if ep, err := strconv.ParseFloat(epStr, 64); err == nil {
+			entryPrice = ep
+		}
+	} else if ep, ok := targetPosition["entry_price"].(float64); ok {
+		entryPrice = ep
+	} else if epStr, ok := targetPosition["entry_price"].(string); ok {
+		if ep, err := strconv.ParseFloat(epStr, 64); err == nil {
+			entryPrice = ep
+		}
 	}
-	if positionSide == "SHORT" && decision.NewTakeProfit >= marketData.CurrentPrice {
-		return fmt.Errorf("空单止盈必须低于当前价格 (当前: %.2f, 新止盈: %.2f)", marketData.CurrentPrice, decision.NewTakeProfit)
+
+	// 获取旧的止盈价格（必须从持仓数据中获取）
+	var oldTakeProfit float64
+	if tp, ok := targetPosition["takeProfit"].(float64); ok && tp > 0 {
+		oldTakeProfit = tp
+	}
+
+	// 验证新止盈价格合理性 (移动止盈)
+	currentPrice := marketData.CurrentPrice
+
+	if positionSide == "LONG" {
+		// 规则1：多仓移动止盈后，新止盈必须仍然高于当前价
+		if decision.NewTakeProfit <= currentPrice {
+			return fmt.Errorf("多单止盈必须高于当前价格 (当前: %.2f, 新止盈: %.2f)", currentPrice, decision.NewTakeProfit)
+		}
+
+		// 规则2：根据移动方向，进行合理性提醒
+		if oldTakeProfit > 0 {
+			// 已有止盈单，进行移动止盈验证
+			if decision.NewTakeProfit > oldTakeProfit {
+				// 上移止盈：提高目标。这是常见的操作。
+				log.Printf("  ✅ 多仓止盈上移提高: %.2f -> %.2f (入场价: %.2f)", oldTakeProfit, decision.NewTakeProfit, entryPrice)
+			} else if decision.NewTakeProfit < oldTakeProfit {
+				// 下移止盈：降低目标。可能为了更快止盈。
+				log.Printf("  ⚠️  多仓止盈下移降低: %.2f -> %.2f (入场价: %.2f) - 注意：降低盈利目标", oldTakeProfit, decision.NewTakeProfit, entryPrice)
+			} else {
+				return fmt.Errorf("新止盈价与旧止盈价相同，无需更新")
+			}
+		} else {
+			// 首次设置止盈
+			log.Printf("  ✅ 多仓首次设置止盈: %.2f (入场价: %.2f, 当前价格: %.2f)", decision.NewTakeProfit, entryPrice, currentPrice)
+		}
+
+	} else if positionSide == "SHORT" {
+		// 空仓镜像逻辑
+		if decision.NewTakeProfit >= currentPrice {
+			return fmt.Errorf("空单止盈必须低于当前价格 (当前: %.2f, 新止盈: %.2f)", currentPrice, decision.NewTakeProfit)
+		}
+
+		if oldTakeProfit > 0 {
+			// 已有止盈单，进行移动止盈验证
+			if decision.NewTakeProfit < oldTakeProfit {
+				// 下移止盈：提高目标。这是常见的操作。
+				log.Printf("  ✅ 空仓止盈下移提高: %.2f -> %.2f (入场价: %.2f)", oldTakeProfit, decision.NewTakeProfit, entryPrice)
+			} else if decision.NewTakeProfit > oldTakeProfit {
+				// 上移止盈：降低目标。可能为了更快止盈。
+				log.Printf("  ⚠️  空仓止盈上移降低: %.2f -> %.2f (入场价: %.2f) - 注意：降低盈利目标", oldTakeProfit, decision.NewTakeProfit, entryPrice)
+			} else {
+				return fmt.Errorf("新止盈价与旧止盈价相同，无需更新")
+			}
+		} else {
+			// 首次设置止盈
+			log.Printf("  ✅ 空仓首次设置止盈: %.2f (入场价: %.2f, 当前价格: %.2f)", decision.NewTakeProfit, entryPrice, currentPrice)
+		}
 	}
 
 	// ⚠️ 防御性检查：检测是否存在双向持仓（不应该出现，但提供保护）

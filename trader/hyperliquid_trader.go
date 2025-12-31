@@ -735,6 +735,14 @@ func (t *HyperliquidTrader) GetMarketPrice(symbol string) (float64, error) {
 	return 0, fmt.Errorf("未找到 %s 的价格", symbol)
 }
 
+// GetCurrentStopLoss 获取当前止损价格
+// 注意：Hyperliquid 平台暂不支持直接查询止损订单，返回 0 表示无法获取
+func (t *HyperliquidTrader) GetCurrentStopLoss(symbol string, positionSide string) (float64, error) {
+	// TODO: 如果 Hyperliquid API 支持查询止损订单，可以在这里实现
+	// 目前返回 0 表示没有止损单（不是错误）
+	return 0, nil
+}
+
 // SetStopLoss 设置止损单
 func (t *HyperliquidTrader) SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) error {
 	coin := convertSymbolToHyperliquid(symbol)

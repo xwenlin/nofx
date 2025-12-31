@@ -36,6 +36,10 @@ type Trader interface {
 	// SetTakeProfit 设置止盈单
 	SetTakeProfit(symbol string, positionSide string, quantity, takeProfitPrice float64) error
 
+	// GetCurrentStopLoss 获取当前止损价格
+	// 返回值: 止损价格（如果不存在止损单则返回0，不是错误）
+	GetCurrentStopLoss(symbol string, positionSide string) (float64, error)
+
 	// CancelStopLossOrders 仅取消止损单（修复 BUG：调整止损时不删除止盈）
 	CancelStopLossOrders(symbol string) error
 

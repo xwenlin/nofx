@@ -1066,6 +1066,11 @@ func (m *MockTrader) SetTakeProfit(symbol string, positionSide string, quantity,
 	return nil
 }
 
+func (m *MockTrader) GetCurrentStopLoss(symbol string, positionSide string) (float64, error) {
+	// Mock implementation: return 0 to indicate no stop loss is set
+	return 0, nil
+}
+
 func (m *MockTrader) CancelStopLossOrders(symbol string) error {
 	return nil
 }
