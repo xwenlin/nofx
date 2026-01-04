@@ -110,7 +110,8 @@ func (l *DecisionLogger) SetDatabase(db config.DatabaseInterface, traderID strin
 func (l *DecisionLogger) LogDecision(record *DecisionRecord) error {
 	l.cycleNumber++
 	record.CycleNumber = l.cycleNumber
-	record.Timestamp = time.Now()
+	// 使用 UTC 时间确保时区一致性
+	record.Timestamp = time.Now().UTC()
 
 	// 生成文件名：decision_YYYYMMDD_HHMMSS_cycleN.json
 	filename := fmt.Sprintf("decision_%s_cycle%d.json",

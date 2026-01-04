@@ -1509,17 +1509,29 @@ func (s *Server) handleDecisions(c *gin.Context) {
 	statusFilter := c.DefaultQuery("status_filter", "all")
 
 	// 获取时间过滤参数
+	// 前端发送的时间格式：RFC3339 格式，可能带时区偏移（如：2025-12-06T16:26:56+08:00）或 UTC（如：2025-12-31T22:00:00Z）
+	// 统一转换为 UTC 时间，确保与数据库中的 UTC 时间进行比较
 	var startTime, endTime *time.Time
 	if startTimeStr := c.Query("start_time"); startTimeStr != "" {
 		if t, err := time.Parse(time.RFC3339, startTimeStr); err == nil {
-			startTime = &t
+			// 统一转换为 UTC 时间进行比较（无论输入是 UTC 还是带时区偏移）
+			utcTime := t.UTC()
+			startTime = &utcTime
+		} else {
+			log.Printf("⚠️ 解析 start_time 失败: %v, 原始值: %s", err, startTimeStr)
 		}
 	}
 	if endTimeStr := c.Query("end_time"); endTimeStr != "" {
 		if t, err := time.Parse(time.RFC3339, endTimeStr); err == nil {
-			endTime = &t
+			// 统一转换为 UTC 时间进行比较（无论输入是 UTC 还是带时区偏移）
+			utcTime := t.UTC()
+			endTime = &utcTime
+		} else {
+			log.Printf("⚠️ 解析 end_time 失败: %v, 原始值: %s", err, endTimeStr)
 		}
 	}
+	// 打印时间参数
+	log.Printf("📅 查询时间范围: start_time=%v, end_time=%v", startTime, endTime)
 
 	// 从数据库获取数据（支持分页和过滤）
 	logs, totalCount, err := s.database.GetDecisionLogsWithPagination(traderID, page, pageSize, actionFilter, statusFilter, startTime, endTime)

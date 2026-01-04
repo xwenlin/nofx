@@ -61,13 +61,13 @@ export default function DecisionLogs({ traderId }: DecisionLogsProps) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []) // 只在组件挂载时执行一次
 
-    // 格式化时间为RFC3339格式
+    // 格式化时间为RFC3339格式（带时区信息）
+    // 将用户选择的本地时间转换为带时区偏移的格式（如：2025-12-06T16:26:56+08:00）
+    // 后端会统一转换为 UTC 时间进行查询，确保时区一致性
     const formatTimeForAPI = (dateTime: string): string | undefined => {
         if (!dateTime) return undefined
         try {
-            // dateTime 格式: "YYYY-MM-DDTHH:mm" 或 "YYYY-MM-DDTHH:00"
-            // 直接转换为 RFC3339 格式，不进行时区转换（作为 UTC 时间）
-            // 因为用户选择的时间就是他们想要查询的时间，不需要时区转换
+            // dateTime 格式: "YYYY-MM-DDTHH:mm"（本地时间）
             if (dateTime.includes('T')) {
                 const parts = dateTime.split('T')
                 if (parts.length !== 2) return undefined
@@ -81,8 +81,28 @@ export default function DecisionLogs({ traderId }: DecisionLogsProps) {
                     timeWithSeconds = timePart + ':00'
                 }
 
-                // 组合成 RFC3339 格式: YYYY-MM-DDTHH:mm:ssZ
-                return `${datePart}T${timeWithSeconds}Z`
+                // 将本地时间字符串解析为 Date 对象（会被解释为本地时间）
+                const localDate = new Date(`${datePart}T${timeWithSeconds}`)
+
+                // 获取本地时区偏移
+                // getTimezoneOffset() 返回 UTC 与本地时间的差值（分钟）
+                // 例如：UTC+8 返回 -480，UTC-5 返回 300
+                // 需要转换为 RFC3339 格式的偏移（如：+08:00 或 -05:00）
+                const offsetMinutes = -localDate.getTimezoneOffset() // 取反得到正确的偏移方向
+                const offsetHours = Math.floor(Math.abs(offsetMinutes) / 60)
+                const offsetMins = Math.abs(offsetMinutes) % 60
+                const offsetSign = offsetMinutes >= 0 ? '+' : '-'
+                const offsetStr = `${offsetSign}${String(offsetHours).padStart(2, '0')}:${String(offsetMins).padStart(2, '0')}`
+
+                // 格式化为 RFC3339 格式，带时区偏移（如：2025-12-06T16:26:56+08:00）
+                const year = localDate.getFullYear()
+                const month = String(localDate.getMonth() + 1).padStart(2, '0')
+                const day = String(localDate.getDate()).padStart(2, '0')
+                const hour = String(localDate.getHours()).padStart(2, '0')
+                const minute = String(localDate.getMinutes()).padStart(2, '0')
+                const second = String(localDate.getSeconds()).padStart(2, '0')
+
+                return `${year}-${month}-${day}T${hour}:${minute}:${second}${offsetStr}`
             }
             return undefined
         } catch {
