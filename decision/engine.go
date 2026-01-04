@@ -41,7 +41,9 @@ type PositionInfo struct {
 	PeakPnLPct       float64 `json:"peak_pnl_pct"` // 历史最高收益率（百分比）
 	LiquidationPrice float64 `json:"liquidation_price"`
 	MarginUsed       float64 `json:"margin_used"`
-	UpdateTime       int64   `json:"update_time"` // 持仓更新时间戳（毫秒）
+	UpdateTime       int64   `json:"update_time"`           // 持仓更新时间戳（毫秒）
+	StopLoss         float64 `json:"stop_loss,omitempty"`   // 当前止损价格
+	TakeProfit       float64 `json:"take_profit,omitempty"` // 当前止盈价格
 }
 
 // AccountInfo 账户信息
@@ -161,7 +163,7 @@ func GetFullDecisionWithCustomPrompt(ctx *Context, mcpClient *mcp.Client, custom
 	}
 
 	// 4. 解析AI响应
-	decision, err := parseFullDecisionResponse(aiResponse, ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage)
+	decision, err := parseFullDecisionResponse(aiResponse, ctx)
 
 	// 无论是否有错误，都要保存 SystemPrompt 和 UserPrompt（用于调试和决策未执行后的问题定位）
 	if decision != nil {
@@ -369,14 +371,14 @@ func buildSystemPrompt(templateName string) string {
 	sb.WriteString("        \"take_profit\": 107200,\n")
 	sb.WriteString("        \"confidence\": 85,\n")
 	sb.WriteString("        \"risk_usd\": 30,\n")
-	sb.WriteString("        \"reasoning\": \"四层框架共振，...，盈亏比2.25符合要求\"\n")
+	sb.WriteString("        \"reasoning\": \"四层框架共振，价格回调至...，盈亏比2.25符合要求\"\n")
 	sb.WriteString("    }\n")
 	sb.WriteString("]\n")
 	sb.WriteString("```\n")
 	sb.WriteString("</decision>\n")
 	sb.WriteString("```\n\n")
 	sb.WriteString("**字段要求**\n")
-	sb.WriteString("- 开仓时必填:leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning。\n")
+	sb.WriteString("- 开仓时必填: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning。\n")
 	sb.WriteString("- 更新止损时必填: new_stop_loss\n")
 	sb.WriteString("- 更新止盈时必填: new_take_profit\n")
 
@@ -666,10 +668,20 @@ func buildUserPrompt(ctx *Context) string {
 				holdingDuration = "未知"
 			}
 
-			sb.WriteString(fmt.Sprintf("  - %s | %s | 入场价%.4f | 当前价%.4f | 数量%.4f | 仓位价值%.2f USDT | 盈亏%+.2f%% | 盈亏金额%+.2f USDT | 最高收益率%.2f%% | 杠杆%dx | 保证金%.0f | 强平价%.4f | 持仓时长%s\n",
+			// 构建止损/止盈信息字符串
+			stopLossStr := "未设置"
+			if pos.StopLoss > 0 {
+				stopLossStr = fmt.Sprintf("%.4f", pos.StopLoss)
+			}
+			takeProfitStr := "未设置"
+			if pos.TakeProfit > 0 {
+				takeProfitStr = fmt.Sprintf("%.4f", pos.TakeProfit)
+			}
+
+			sb.WriteString(fmt.Sprintf("  - %s | %s | 入场价%.4f | 当前价%.4f | 数量%.4f | 仓位价值%.2f USDT | 盈亏%+.2f%% | 盈亏金额%+.2f USDT | 最高收益率%.2f%% | 杠杆%dx | 保证金%.0f | 强平价%.4f | 止损价%s | 止盈价%s | 持仓时长%s\n",
 				pos.Symbol, strings.ToUpper(pos.Side), pos.EntryPrice, pos.MarkPrice, pos.Quantity,
 				positionValue, pos.UnrealizedPnLPct, pos.UnrealizedPnL, pos.PeakPnLPct,
-				pos.Leverage, pos.MarginUsed, pos.LiquidationPrice, holdingDuration))
+				pos.Leverage, pos.MarginUsed, pos.LiquidationPrice, stopLossStr, takeProfitStr, holdingDuration))
 		}
 	} else {
 		sb.WriteString("- 当前持仓: 0 个\n")
@@ -945,7 +957,7 @@ func buildUserPrompt(ctx *Context) string {
 }
 
 // parseFullDecisionResponse 解析AI的完整决策响应
-func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthLeverage, altcoinLeverage int) (*FullDecision, error) {
+func parseFullDecisionResponse(aiResponse string, ctx *Context) (*FullDecision, error) {
 	// 1. 提取思维链
 	cotTrace := extractCoTTrace(aiResponse)
 
@@ -959,11 +971,15 @@ func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthL
 		}, fmt.Errorf("提取决策失败: %w", err)
 	}
 
-	// 3. 规范化决策（自动修正超出限制的杠杆和仓位大小）
-	normalizeDecisions(decisions, accountEquity, btcEthLeverage, altcoinLeverage)
+	// 3. 计算系统状态以获取交易模式
+	systemStatus := calculateSystemStatus(ctx)
+	tradingMode := systemStatus.TradingMode // "正常模式" 或 "保守模式"
 
-	// 4. 验证决策
-	if err := validateDecisions(decisions, accountEquity, btcEthLeverage, altcoinLeverage); err != nil {
+	// 4. 规范化决策（自动修正超出限制的杠杆和仓位大小）
+	normalizeDecisions(decisions, ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage)
+
+	// 5. 验证决策（传入交易模式和Context以获取市场数据）
+	if err := validateDecisions(decisions, ctx, tradingMode); err != nil {
 		return &FullDecision{
 			CoTTrace:        cotTrace,
 			Decisions:       decisions,
@@ -1216,10 +1232,10 @@ func normalizeDecisions(decisions []Decision, accountEquity float64, btcEthLever
 	}
 }
 
-// validateDecisions 验证所有决策（需要账户信息和杠杆配置）
-func validateDecisions(decisions []Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int) error {
+// validateDecisions 验证所有决策（需要Context和交易模式）
+func validateDecisions(decisions []Decision, ctx *Context, tradingMode string) error {
 	for i, decision := range decisions {
-		if err := validateDecision(&decision, accountEquity, btcEthLeverage, altcoinLeverage); err != nil {
+		if err := validateDecision(&decision, ctx, tradingMode); err != nil {
 			return fmt.Errorf("决策 #%d 验证失败: %w", i+1, err)
 		}
 	}
@@ -1227,7 +1243,7 @@ func validateDecisions(decisions []Decision, accountEquity float64, btcEthLevera
 }
 
 // validateDecision 验证单个决策的有效性
-func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int) error {
+func validateDecision(d *Decision, ctx *Context, tradingMode string) error {
 	// 验证action
 	validActions := map[string]bool{
 		"open_long":          true,
@@ -1248,11 +1264,11 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 	// 开仓操作必须提供完整参数
 	if d.Action == "open_long" || d.Action == "open_short" {
 		// 根据币种使用配置的杠杆上限
-		maxLeverage := altcoinLeverage          // 山寨币使用配置的杠杆
-		maxPositionValue := accountEquity * 1.5 // 山寨币最多1.5倍账户净值
+		maxLeverage := ctx.AltcoinLeverage                // 山寨币使用配置的杠杆
+		maxPositionValue := ctx.Account.TotalEquity * 1.5 // 山寨币最多1.5倍账户净值
 		if d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT" {
-			maxLeverage = btcEthLeverage          // BTC和ETH使用配置的杠杆
-			maxPositionValue = accountEquity * 10 // BTC/ETH最多10倍账户净值
+			maxLeverage = ctx.BTCETHLeverage                // BTC和ETH使用配置的杠杆
+			maxPositionValue = ctx.Account.TotalEquity * 10 // BTC/ETH最多10倍账户净值
 		}
 
 		// ✅ Fallback 机制：杠杆超限时自动修正为上限值（而不是直接拒绝决策）
@@ -1296,47 +1312,78 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 			return fmt.Errorf("止损和止盈必须大于0")
 		}
 
-		// 验证止损止盈的合理性
+		// 获取市场当前价用于验证
+		marketData, ok := ctx.MarketDataMap[d.Symbol]
+		if !ok || marketData == nil {
+			return fmt.Errorf("无法获取 %s 的市场数据，无法验证止损止盈", d.Symbol)
+		}
+		currentPrice := marketData.CurrentPrice
+		if currentPrice <= 0 {
+			return fmt.Errorf("%s 当前价格无效(%.4f)，无法验证止损止盈", d.Symbol, currentPrice)
+		}
+
+		// 验证止损止盈的合理性（考虑市场价）
 		if d.Action == "open_long" {
+			// 做多：止损价 < 当前价 < 止盈价
 			if d.StopLoss >= d.TakeProfit {
-				return fmt.Errorf("做多时止损价必须小于止盈价")
+				return fmt.Errorf("做多时止损价必须小于止盈价 (止损:%.4f >= 止盈:%.4f)", d.StopLoss, d.TakeProfit)
+			}
+			if d.StopLoss >= currentPrice {
+				return fmt.Errorf("做多时止损价必须小于当前价，否则会立即触发 (止损:%.4f >= 当前价:%.4f)", d.StopLoss, currentPrice)
+			}
+			if d.TakeProfit <= currentPrice {
+				return fmt.Errorf("做多时止盈价必须大于当前价，否则无法止盈 (止盈:%.4f <= 当前价:%.4f)", d.TakeProfit, currentPrice)
 			}
 		} else {
+			// 做空：止盈价 < 当前价 < 止损价
 			if d.StopLoss <= d.TakeProfit {
-				return fmt.Errorf("做空时止损价必须大于止盈价")
+				return fmt.Errorf("做空时止损价必须大于止盈价 (止损:%.4f <= 止盈:%.4f)", d.StopLoss, d.TakeProfit)
+			}
+			if d.StopLoss <= currentPrice {
+				return fmt.Errorf("做空时止损价必须大于当前价，否则会立即触发 (止损:%.4f <= 当前价:%.4f)", d.StopLoss, currentPrice)
+			}
+			if d.TakeProfit >= currentPrice {
+				return fmt.Errorf("做空时止盈价必须小于当前价，否则无法止盈 (止盈:%.4f >= 当前价:%.4f)", d.TakeProfit, currentPrice)
 			}
 		}
 
-		// 验证风险回报比（必须≥1:3）
-		// 计算入场价（假设当前市价）
-		var entryPrice float64
+		// 验证风险回报比（根据交易模式：正常模式≥2，保守模式≥3）
+		// 使用市场当前价作为入场价（marketData 和 currentPrice 已在前面获取）
+		entryPrice := currentPrice
+
+		// 根据提示词公式计算盈亏比：(止盈价 - 入场价)的绝对值 / (入场价 - 止损价)的绝对值
+		var riskRewardRatio float64
 		if d.Action == "open_long" {
-			// 做多：入场价在止损和止盈之间
-			entryPrice = d.StopLoss + (d.TakeProfit-d.StopLoss)*0.2 // 假设在20%位置入场
-		} else {
-			// 做空：入场价在止损和止盈之间
-			entryPrice = d.StopLoss - (d.StopLoss-d.TakeProfit)*0.2 // 假设在20%位置入场
-		}
-
-		var riskPercent, rewardPercent, riskRewardRatio float64
-		if d.Action == "open_long" {
-			riskPercent = (entryPrice - d.StopLoss) / entryPrice * 100
-			rewardPercent = (d.TakeProfit - entryPrice) / entryPrice * 100
-			if riskPercent > 0 {
-				riskRewardRatio = rewardPercent / riskPercent
+			// 做多：止盈价 > 入场价 > 止损价
+			reward := math.Abs(d.TakeProfit - entryPrice) // (止盈价 - 入场价)的绝对值
+			risk := math.Abs(entryPrice - d.StopLoss)     // (入场价 - 止损价)的绝对值
+			if risk > 0 {
+				riskRewardRatio = reward / risk
 			}
 		} else {
-			riskPercent = (d.StopLoss - entryPrice) / entryPrice * 100
-			rewardPercent = (entryPrice - d.TakeProfit) / entryPrice * 100
-			if riskPercent > 0 {
-				riskRewardRatio = rewardPercent / riskPercent
+			// 做空：止损价 > 入场价 > 止盈价
+			reward := math.Abs(entryPrice - d.TakeProfit) // (入场价 - 止盈价)的绝对值 = (止盈价 - 入场价)的绝对值
+			risk := math.Abs(d.StopLoss - entryPrice)     // (止损价 - 入场价)的绝对值 = (入场价 - 止损价)的绝对值
+			if risk > 0 {
+				riskRewardRatio = reward / risk
 			}
 		}
 
-		// 硬约束：风险回报比必须≥3.0
-		if riskRewardRatio < 3.0 {
-			return fmt.Errorf("风险回报比过低(%.2f:1)，必须≥3.0:1 [风险:%.2f%% 收益:%.2f%%] [止损:%.2f 止盈:%.2f]",
-				riskRewardRatio, riskPercent, rewardPercent, d.StopLoss, d.TakeProfit)
+		// 根据交易模式确定盈亏比要求
+		var minRiskRewardRatio float64
+		var modeName string
+		if tradingMode == "保守模式" {
+			minRiskRewardRatio = 3.0
+			modeName = "保守模式"
+		} else {
+			minRiskRewardRatio = 2.0
+			modeName = "正常模式"
+		}
+
+		// 硬约束：风险回报比必须满足模式要求
+		if riskRewardRatio < minRiskRewardRatio {
+			return fmt.Errorf("风险回报比过低(%.2f:1)，%s要求必须≥%.1f:1 [入场价:%.4f 止损:%.4f 止盈:%.4f]",
+				riskRewardRatio, modeName, minRiskRewardRatio, entryPrice, d.StopLoss, d.TakeProfit)
 		}
 	}
 

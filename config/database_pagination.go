@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // GetDecisionLogsWithPagination 获取决策日志（支持分页和过滤）
 // actionFilter: "all", "has_trading", "wait_only", "open_only", "close_only"
 // statusFilter: "all", "decision_failed", "action_failed"
-func (d *Database) GetDecisionLogsWithPagination(traderID string, page, pageSize int, actionFilter string, statusFilter string) ([]*DecisionLog, int, error) {
+// startTime, endTime: 时间过滤，如果为空则不过滤
+func (d *Database) GetDecisionLogsWithPagination(traderID string, page, pageSize int, actionFilter string, statusFilter string, startTime *time.Time, endTime *time.Time) ([]*DecisionLog, int, error) {
 	// 计算分页
 	if page < 1 {
 		page = 1
@@ -22,12 +24,12 @@ func (d *Database) GetDecisionLogsWithPagination(traderID string, page, pageSize
 	}
 
 	// 先获取所有数据用于过滤（因为过滤需要在应用层进行）
+	// 构建SQL查询，添加时间过滤条件
+	// 注意：列表查询时不加载长文本字段（system_prompt, input_prompt, cot_trace）以提高性能
 	query := `
-		SELECT id, trader_id, cycle_number, timestamp, content, 
-		       COALESCE(system_prompt, '') as system_prompt,
-		       COALESCE(input_prompt, '') as input_prompt, 
-		       COALESCE(cot_trace, '') as cot_trace, 
+		SELECT id, trader_id, cycle_number, timestamp, 
 		       COALESCE(decision_json, '') as decision_json,
+		       COALESCE(decisions, '') as decisions,
 		       COALESCE(account_state, '') as account_state,
 		       COALESCE(positions, '') as positions,
 		       COALESCE(execution_log, '') as execution_log,
@@ -36,10 +38,22 @@ func (d *Database) GetDecisionLogsWithPagination(traderID string, page, pageSize
 		       created_at
 		FROM decisions
 		WHERE trader_id = ?
-		ORDER BY timestamp DESC
 	`
+	args := []interface{}{traderID}
 
-	rows, err := d.db.Query(query, traderID)
+	// 添加时间过滤条件
+	if startTime != nil {
+		query += " AND timestamp >= ?"
+		args = append(args, *startTime)
+	}
+	if endTime != nil {
+		query += " AND timestamp <= ?"
+		args = append(args, *endTime)
+	}
+
+	query += " ORDER BY timestamp DESC"
+
+	rows, err := d.db.Query(query, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("查询决策日志失败: %w", err)
 	}
@@ -49,8 +63,8 @@ func (d *Database) GetDecisionLogsWithPagination(traderID string, page, pageSize
 	for rows.Next() {
 		var l DecisionLog
 		err := rows.Scan(
-			&l.ID, &l.TraderID, &l.CycleNumber, &l.Timestamp, &l.Content,
-			&l.SystemPrompt, &l.InputPrompt, &l.CoTTrace, &l.DecisionJSON,
+			&l.ID, &l.TraderID, &l.CycleNumber, &l.Timestamp,
+			&l.DecisionJSON, &l.Decisions,
 			&l.AccountState, &l.Positions, &l.ExecutionLog,
 			&l.Success, &l.Error, &l.AIRequestDurationMs, &l.CreatedAt,
 		)

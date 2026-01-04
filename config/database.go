@@ -61,7 +61,8 @@ type DatabaseInterface interface {
 	// 决策日志相关方法
 	CreateDecisionLog(log *DecisionLog) error
 	GetDecisionLogs(traderID string, limit int) ([]*DecisionLog, error)
-	GetDecisionLogsWithPagination(traderID string, page, pageSize int, actionFilter string, statusFilter string) ([]*DecisionLog, int, error) // 返回日志列表和总数
+	GetDecisionLogsWithPagination(traderID string, page, pageSize int, actionFilter string, statusFilter string, startTime *time.Time, endTime *time.Time) ([]*DecisionLog, int, error) // 返回日志列表和总数
+	GetDecisionLogByID(id int64) (*DecisionLog, error)                                                                                                                                  // 按需加载详细内容（包含长文本字段）
 	Close() error
 }
 
@@ -249,11 +250,12 @@ func (d *Database) createTables() error {
 			trader_id TEXT NOT NULL,
 			cycle_number INTEGER NOT NULL,
 			timestamp DATETIME NOT NULL,
-			content TEXT NOT NULL, -- 完整的JSON content（保留用于完整恢复）
-			system_prompt TEXT DEFAULT '', -- 系统Prompt
-			input_prompt TEXT DEFAULT '', -- AI输入Prompt
-			cot_trace TEXT DEFAULT '', -- AI思维链
+			content TEXT DEFAULT '', -- 完整的JSON content（已废弃，保留用于迁移）
+			system_prompt TEXT DEFAULT '', -- 系统Prompt（按需加载）
+			input_prompt TEXT DEFAULT '', -- AI输入Prompt（按需加载）
+			cot_trace TEXT DEFAULT '', -- AI思维链（按需加载）
 			decision_json TEXT DEFAULT '', -- AI输出的决策JSON
+			decisions TEXT DEFAULT '', -- 执行的决策列表 (JSON)
 			account_state TEXT DEFAULT '', -- 账户状态快照 (JSON)
 			positions TEXT DEFAULT '', -- 持仓快照 (JSON)
 			execution_log TEXT DEFAULT '', -- 执行日志（JSON数组字符串）
@@ -333,6 +335,7 @@ func (d *Database) createTables() error {
 		`ALTER TABLE traders ADD COLUMN system_prompt_template TEXT DEFAULT 'default'`, // 系统提示词模板名称
 		`ALTER TABLE ai_models ADD COLUMN custom_api_url TEXT DEFAULT ''`,              // 自定义API地址
 		`ALTER TABLE ai_models ADD COLUMN custom_model_name TEXT DEFAULT ''`,           // 自定义模型名称
+		`ALTER TABLE decisions ADD COLUMN decisions TEXT DEFAULT ''`,                   // 执行的决策列表 (JSON)
 	}
 
 	for _, query := range alterQueries {
@@ -604,11 +607,12 @@ type DecisionLog struct {
 	TraderID            string    `json:"trader_id"`
 	CycleNumber         int       `json:"cycle_number"`
 	Timestamp           time.Time `json:"timestamp"`
-	Content             string    `json:"content"` // 完整的JSON content
-	SystemPrompt        string    `json:"system_prompt"`
-	InputPrompt         string    `json:"input_prompt"`
-	CoTTrace            string    `json:"cot_trace"`
+	Content             string    `json:"content,omitempty"`       // 完整的JSON content（已废弃，保留用于迁移）
+	SystemPrompt        string    `json:"system_prompt,omitempty"` // 系统Prompt（按需加载）
+	InputPrompt         string    `json:"input_prompt,omitempty"`  // AI输入Prompt（按需加载）
+	CoTTrace            string    `json:"cot_trace,omitempty"`     // AI思维链（按需加载）
 	DecisionJSON        string    `json:"decision_json"`
+	Decisions           string    `json:"decisions"`     // 执行的决策列表 (JSON)
 	AccountState        string    `json:"account_state"` // JSON string
 	Positions           string    `json:"positions"`     // JSON string
 	ExecutionLog        string    `json:"execution_log"` // JSON string of []string
@@ -1772,9 +1776,9 @@ func (d *Database) GetTradesBySymbol(traderID, symbol string, limit int) ([]*Tra
 // CreateDecisionLog 创建决策日志
 func (d *Database) CreateDecisionLog(log *DecisionLog) error {
 	result, err := d.db.Exec(`
-		INSERT INTO decisions (trader_id, cycle_number, timestamp, content, system_prompt, input_prompt, cot_trace, decision_json, account_state, positions, execution_log, success, error, ai_request_duration_ms)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, log.TraderID, log.CycleNumber, log.Timestamp, log.Content, log.SystemPrompt, log.InputPrompt, log.CoTTrace, log.DecisionJSON, log.AccountState, log.Positions, log.ExecutionLog, log.Success, log.Error, log.AIRequestDurationMs)
+		INSERT INTO decisions (trader_id, cycle_number, timestamp, content, system_prompt, input_prompt, cot_trace, decision_json, decisions, account_state, positions, execution_log, success, error, ai_request_duration_ms)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, log.TraderID, log.CycleNumber, log.Timestamp, log.Content, log.SystemPrompt, log.InputPrompt, log.CoTTrace, log.DecisionJSON, log.Decisions, log.AccountState, log.Positions, log.ExecutionLog, log.Success, log.Error, log.AIRequestDurationMs)
 	if err != nil {
 		return fmt.Errorf("创建决策日志失败: %w", err)
 	}
@@ -1831,4 +1835,42 @@ func (d *Database) GetDecisionLogs(traderID string, limit int) ([]*DecisionLog, 
 	}
 
 	return logs, nil
+}
+
+// GetDecisionLogByID 根据ID获取决策日志详细内容（包含长文本字段，用于按需加载）
+func (d *Database) GetDecisionLogByID(id int64) (*DecisionLog, error) {
+	query := `
+		SELECT id, trader_id, cycle_number, timestamp, 
+		       COALESCE(content, '') as content,
+		       COALESCE(system_prompt, '') as system_prompt,
+		       COALESCE(input_prompt, '') as input_prompt, 
+		       COALESCE(cot_trace, '') as cot_trace, 
+		       COALESCE(decision_json, '') as decision_json,
+		       COALESCE(decisions, '') as decisions,
+		       COALESCE(account_state, '') as account_state,
+		       COALESCE(positions, '') as positions,
+		       COALESCE(execution_log, '') as execution_log,
+		       success, error, 
+		       COALESCE(ai_request_duration_ms, 0) as ai_request_duration_ms,
+		       created_at
+		FROM decisions
+		WHERE id = ?
+	`
+
+	var l DecisionLog
+	err := d.db.QueryRow(query, id).Scan(
+		&l.ID, &l.TraderID, &l.CycleNumber, &l.Timestamp,
+		&l.Content, &l.SystemPrompt, &l.InputPrompt, &l.CoTTrace,
+		&l.DecisionJSON, &l.Decisions,
+		&l.AccountState, &l.Positions, &l.ExecutionLog,
+		&l.Success, &l.Error, &l.AIRequestDurationMs, &l.CreatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("决策日志不存在: id=%d", id)
+		}
+		return nil, fmt.Errorf("查询决策日志失败: %w", err)
+	}
+
+	return &l, nil
 }

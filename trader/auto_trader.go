@@ -515,6 +515,8 @@ func (at *AutoTrader) runCycle() error {
 			UnrealizedProfit: pos.UnrealizedPnL,
 			Leverage:         float64(pos.Leverage),
 			LiquidationPrice: pos.LiquidationPrice,
+			StopLoss:         pos.StopLoss,
+			TakeProfit:       pos.TakeProfit,
 		})
 	}
 
@@ -874,6 +876,15 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		peakPnlPct := at.peakPnLCache[posKey]
 		at.peakPnLCacheMutex.RUnlock()
 
+		// 获取止损/止盈价格（从持仓数据中）
+		var stopLoss, takeProfit float64
+		if sl, ok := pos["stopLoss"].(float64); ok && sl > 0 {
+			stopLoss = sl
+		}
+		if tp, ok := pos["takeProfit"].(float64); ok && tp > 0 {
+			takeProfit = tp
+		}
+
 		positionInfos = append(positionInfos, decision.PositionInfo{
 			Symbol:           symbol,
 			Side:             side,
@@ -887,6 +898,8 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 			LiquidationPrice: liquidationPrice,
 			MarginUsed:       marginUsed,
 			UpdateTime:       updateTime,
+			StopLoss:         stopLoss,
+			TakeProfit:       takeProfit,
 		})
 	}
 
@@ -1159,15 +1172,71 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	posKey := decision.Symbol + "_long"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 
-	// 设置止损止盈
-	if err := at.trader.SetStopLoss(decision.Symbol, "LONG", quantity, decision.StopLoss); err != nil {
-		log.Printf("  ⚠ 设置止损失败: %v", err)
-	}
-	if err := at.trader.SetTakeProfit(decision.Symbol, "LONG", quantity, decision.TakeProfit); err != nil {
-		log.Printf("  ⚠ 设置止盈失败: %v", err)
+	// ⚠️ 关键：开仓后立即查询持仓，获取实际入场价（entryPrice）
+	// 订单对象可能不包含成交价，从持仓中获取最准确
+	var actualEntryPrice float64
+	positions, err = at.trader.GetPositions()
+	if err == nil {
+		for _, pos := range positions {
+			if symbol, ok := pos["symbol"].(string); ok && symbol == decision.Symbol {
+				if side, ok := pos["side"].(string); ok && side == "long" {
+					if ep, ok := pos["entryPrice"].(float64); ok && ep > 0 {
+						actualEntryPrice = ep
+						log.Printf("  📊 获取实际入场价: %.4f (市场价: %.4f)", actualEntryPrice, marketData.CurrentPrice)
+						break
+					} else if epStr, ok := pos["entryPrice"].(string); ok {
+						if ep, err := strconv.ParseFloat(epStr, 64); err == nil && ep > 0 {
+							actualEntryPrice = ep
+							log.Printf("  📊 获取实际入场价: %.4f (市场价: %.4f)", actualEntryPrice, marketData.CurrentPrice)
+							break
+						}
+					}
+				}
+			}
+		}
 	}
 
-	// 记录到数据库
+	// 如果未能获取实际入场价，使用市场价作为后备
+	if actualEntryPrice <= 0 {
+		actualEntryPrice = marketData.CurrentPrice
+		log.Printf("  ⚠️ 未能获取实际入场价，使用市场价: %.4f", actualEntryPrice)
+	}
+
+	// 使用实际入场价和当前价验证止损/止盈价格合理性
+	// 多仓：止损 < 入场价 且 < 当前价，止盈 > 入场价 且 > 当前价
+	currentPrice := marketData.CurrentPrice
+
+	if decision.StopLoss > 0 {
+		// 多仓止损必须 < 入场价 且 < 当前价
+		if decision.StopLoss >= actualEntryPrice {
+			log.Printf("  ❌ 多仓止损价(%.4f) >= 入场价(%.4f)，拒绝设置止损", decision.StopLoss, actualEntryPrice)
+		} else if decision.StopLoss >= currentPrice {
+			log.Printf("  ❌ 多仓止损价(%.4f) >= 当前价(%.4f)，可能立即触发，拒绝设置止损", decision.StopLoss, currentPrice)
+		} else {
+			log.Printf("  ✅ 止损价验证通过: %.4f < 入场价(%.4f) 且 < 当前价(%.4f)", decision.StopLoss, actualEntryPrice, currentPrice)
+			// 只有验证通过才设置止损
+			if err := at.trader.SetStopLoss(decision.Symbol, "LONG", quantity, decision.StopLoss); err != nil {
+				log.Printf("  ⚠ 设置止损失败: %v", err)
+			}
+		}
+	}
+
+	if decision.TakeProfit > 0 {
+		// 多仓止盈必须 > 入场价 且 > 当前价
+		if decision.TakeProfit <= actualEntryPrice {
+			log.Printf("  ❌ 多仓止盈价(%.4f) <= 入场价(%.4f)，无法止盈，拒绝设置止盈", decision.TakeProfit, actualEntryPrice)
+		} else if decision.TakeProfit <= currentPrice {
+			log.Printf("  ❌ 多仓止盈价(%.4f) <= 当前价(%.4f)，无法止盈，拒绝设置止盈", decision.TakeProfit, currentPrice)
+		} else {
+			log.Printf("  ✅ 止盈价验证通过: %.4f > 入场价(%.4f) 且 > 当前价(%.4f)", decision.TakeProfit, actualEntryPrice, currentPrice)
+			// 只有验证通过才设置止盈
+			if err := at.trader.SetTakeProfit(decision.Symbol, "LONG", quantity, decision.TakeProfit); err != nil {
+				log.Printf("  ⚠ 设置止盈失败: %v", err)
+			}
+		}
+	}
+
+	// 记录到数据库（使用实际入场价），确保开仓操作被记录
 	if db, ok := at.database.(interface {
 		CreateTrade(trade *config.TradeRecord) error
 	}); ok {
@@ -1180,7 +1249,7 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 			Symbol:      decision.Symbol,
 			Side:        "long",
 			OpenTime:    time.Now(),
-			OpenPrice:   marketData.CurrentPrice,
+			OpenPrice:   actualEntryPrice, // 使用实际入场价，而不是市场价
 			Quantity:    quantity,
 			Leverage:    decision.Leverage,
 			OrderIDOpen: orderID,
@@ -1266,15 +1335,71 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	posKey := decision.Symbol + "_short"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 
-	// 设置止损止盈
-	if err := at.trader.SetStopLoss(decision.Symbol, "SHORT", quantity, decision.StopLoss); err != nil {
-		log.Printf("  ⚠ 设置止损失败: %v", err)
-	}
-	if err := at.trader.SetTakeProfit(decision.Symbol, "SHORT", quantity, decision.TakeProfit); err != nil {
-		log.Printf("  ⚠ 设置止盈失败: %v", err)
+	// ⚠️ 关键：开仓后立即查询持仓，获取实际入场价（entryPrice）
+	// 订单对象可能不包含成交价，从持仓中获取最准确
+	var actualEntryPrice float64
+	positions, err = at.trader.GetPositions()
+	if err == nil {
+		for _, pos := range positions {
+			if symbol, ok := pos["symbol"].(string); ok && symbol == decision.Symbol {
+				if side, ok := pos["side"].(string); ok && side == "short" {
+					if ep, ok := pos["entryPrice"].(float64); ok && ep > 0 {
+						actualEntryPrice = ep
+						log.Printf("  📊 获取实际入场价: %.4f (市场价: %.4f)", actualEntryPrice, marketData.CurrentPrice)
+						break
+					} else if epStr, ok := pos["entryPrice"].(string); ok {
+						if ep, err := strconv.ParseFloat(epStr, 64); err == nil && ep > 0 {
+							actualEntryPrice = ep
+							log.Printf("  📊 获取实际入场价: %.4f (市场价: %.4f)", actualEntryPrice, marketData.CurrentPrice)
+							break
+						}
+					}
+				}
+			}
+		}
 	}
 
-	// 记录到数据库
+	// 如果未能获取实际入场价，使用市场价作为后备
+	if actualEntryPrice <= 0 {
+		actualEntryPrice = marketData.CurrentPrice
+		log.Printf("  ⚠️ 未能获取实际入场价，使用市场价: %.4f", actualEntryPrice)
+	}
+
+	// 使用实际入场价和当前价验证止损/止盈价格合理性
+	// 空仓：止损 > 入场价 且 > 当前价，止盈 < 入场价 且 < 当前价
+	currentPrice := marketData.CurrentPrice
+
+	if decision.StopLoss > 0 {
+		// 空仓止损必须 > 入场价 且 > 当前价
+		if decision.StopLoss <= actualEntryPrice {
+			log.Printf("  ❌ 空仓止损价(%.4f) <= 入场价(%.4f)，拒绝设置止损", decision.StopLoss, actualEntryPrice)
+		} else if decision.StopLoss <= currentPrice {
+			log.Printf("  ❌ 空仓止损价(%.4f) <= 当前价(%.4f)，可能立即触发，拒绝设置止损", decision.StopLoss, currentPrice)
+		} else {
+			log.Printf("  ✅ 止损价验证通过: %.4f > 入场价(%.4f) 且 > 当前价(%.4f)", decision.StopLoss, actualEntryPrice, currentPrice)
+			// 只有验证通过才设置止损
+			if err := at.trader.SetStopLoss(decision.Symbol, "SHORT", quantity, decision.StopLoss); err != nil {
+				log.Printf("  ⚠ 设置止损失败: %v", err)
+			}
+		}
+	}
+
+	if decision.TakeProfit > 0 {
+		// 空仓止盈必须 < 入场价 且 < 当前价
+		if decision.TakeProfit >= actualEntryPrice {
+			log.Printf("  ❌ 空仓止盈价(%.4f) >= 入场价(%.4f)，无法止盈，拒绝设置止盈", decision.TakeProfit, actualEntryPrice)
+		} else if decision.TakeProfit >= currentPrice {
+			log.Printf("  ❌ 空仓止盈价(%.4f) >= 当前价(%.4f)，无法止盈，拒绝设置止盈", decision.TakeProfit, currentPrice)
+		} else {
+			log.Printf("  ✅ 止盈价验证通过: %.4f < 入场价(%.4f) 且 < 当前价(%.4f)", decision.TakeProfit, actualEntryPrice, currentPrice)
+			// 只有验证通过才设置止盈
+			if err := at.trader.SetTakeProfit(decision.Symbol, "SHORT", quantity, decision.TakeProfit); err != nil {
+				log.Printf("  ⚠ 设置止盈失败: %v", err)
+			}
+		}
+	}
+
+	// 记录到数据库（使用实际入场价），确保开仓操作被记录
 	if db, ok := at.database.(interface {
 		CreateTrade(trade *config.TradeRecord) error
 	}); ok {
@@ -1287,7 +1412,7 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 			Symbol:      decision.Symbol,
 			Side:        "short",
 			OpenTime:    time.Now(),
-			OpenPrice:   marketData.CurrentPrice,
+			OpenPrice:   actualEntryPrice, // 使用实际入场价，而不是市场价
 			Quantity:    quantity,
 			Leverage:    decision.Leverage,
 			OrderIDOpen: orderID,

@@ -12,21 +12,21 @@ import (
 
 // DecisionRecord 决策记录
 type DecisionRecord struct {
-	Timestamp      time.Time          `json:"timestamp"`       // 决策时间
-	CycleNumber    int                `json:"cycle_number"`    // 周期编号
-	SystemPrompt   string             `json:"system_prompt"`   // 系统提示词（发送给AI的系统prompt）
-	InputPrompt    string             `json:"input_prompt"`    // 发送给AI的输入prompt
-	CoTTrace       string             `json:"cot_trace"`       // AI思维链（输出）
-	DecisionJSON   string             `json:"decision_json"`   // 决策JSON
-	AccountState   AccountSnapshot    `json:"account_state"`   // 账户状态快照
-	Positions      []PositionSnapshot `json:"positions"`       // 持仓快照
-	CandidateCoins []string           `json:"candidate_coins"` // 候选币种列表
-	Decisions      []DecisionAction   `json:"decisions"`       // 执行的决策
-	ExecutionLog   []string           `json:"execution_log"`   // 执行日志
-	Success        bool               `json:"success"`         // 是否成功
-	ErrorMessage   string             `json:"error_message"`   // 错误信息（如果有）
-	// AIRequestDurationMs 记录 AI API 调用耗时（毫秒），方便评估调用性能
-	AIRequestDurationMs int64 `json:"ai_request_duration_ms,omitempty"`
+	ID                  int64              `json:"id,omitempty"`                     // 决策日志ID（数据库主键，用于按需加载）
+	Timestamp           time.Time          `json:"timestamp"`                        // 决策时间
+	CycleNumber         int                `json:"cycle_number"`                     // 周期编号
+	SystemPrompt        string             `json:"system_prompt"`                    // 系统提示词（发送给AI的系统prompt）
+	InputPrompt         string             `json:"input_prompt"`                     // 发送给AI的输入prompt
+	CoTTrace            string             `json:"cot_trace"`                        // AI思维链（输出）
+	DecisionJSON        string             `json:"decision_json"`                    // 决策JSON
+	AccountState        AccountSnapshot    `json:"account_state"`                    // 账户状态快照
+	Positions           []PositionSnapshot `json:"positions"`                        // 持仓快照
+	CandidateCoins      []string           `json:"candidate_coins"`                  // 候选币种列表
+	Decisions           []DecisionAction   `json:"decisions"`                        // 执行的决策
+	ExecutionLog        []string           `json:"execution_log"`                    // 执行日志
+	Success             bool               `json:"success"`                          // 是否成功
+	ErrorMessage        string             `json:"error_message"`                    // 错误信息（如果有）
+	AIRequestDurationMs int64              `json:"ai_request_duration_ms,omitempty"` // AI API 调用耗时（毫秒）
 }
 
 // AccountSnapshot 账户状态快照
@@ -49,6 +49,8 @@ type PositionSnapshot struct {
 	UnrealizedProfit float64 `json:"unrealized_profit"`
 	Leverage         float64 `json:"leverage"`
 	LiquidationPrice float64 `json:"liquidation_price"`
+	StopLoss         float64 `json:"stop_loss,omitempty"`   // 当前止损价格
+	TakeProfit       float64 `json:"take_profit,omitempty"` // 当前止盈价格
 }
 
 // DecisionAction 决策动作
@@ -138,16 +140,18 @@ func (l *DecisionLogger) LogDecision(record *DecisionRecord) error {
 		execLogJSON, _ := json.Marshal(record.ExecutionLog)
 		accountStateJSON, _ := json.Marshal(record.AccountState)
 		positionsJSON, _ := json.Marshal(record.Positions)
+		decisionsJSON, _ := json.Marshal(record.Decisions)
 
 		log := &config.DecisionLog{
 			TraderID:            l.traderID,
 			CycleNumber:         record.CycleNumber,
 			Timestamp:           record.Timestamp,
-			Content:             string(data),
+			Content:             "", // 不再存储完整Content，各字段已单独存储
 			SystemPrompt:        record.SystemPrompt,
 			InputPrompt:         record.InputPrompt,
 			CoTTrace:            record.CoTTrace,
 			DecisionJSON:        record.DecisionJSON,
+			Decisions:           string(decisionsJSON), // 单独存储decisions
 			AccountState:        string(accountStateJSON),
 			Positions:           string(positionsJSON),
 			ExecutionLog:        string(execLogJSON),

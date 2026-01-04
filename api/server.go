@@ -182,6 +182,7 @@ func (s *Server) setupRoutes() {
 			protected.GET("/positions", s.handlePositions)
 			protected.GET("/decisions", s.handleDecisions)
 			protected.GET("/decisions/latest", s.handleLatestDecisions)
+			protected.GET("/decisions/:id", s.handleDecisionDetail)
 			protected.GET("/statistics", s.handleStatistics)
 			protected.GET("/performance", s.handlePerformance)
 			protected.GET("/trades", s.handleGetTrades)
@@ -1507,8 +1508,21 @@ func (s *Server) handleDecisions(c *gin.Context) {
 	actionFilter := c.DefaultQuery("action_filter", "all")
 	statusFilter := c.DefaultQuery("status_filter", "all")
 
+	// 获取时间过滤参数
+	var startTime, endTime *time.Time
+	if startTimeStr := c.Query("start_time"); startTimeStr != "" {
+		if t, err := time.Parse(time.RFC3339, startTimeStr); err == nil {
+			startTime = &t
+		}
+	}
+	if endTimeStr := c.Query("end_time"); endTimeStr != "" {
+		if t, err := time.Parse(time.RFC3339, endTimeStr); err == nil {
+			endTime = &t
+		}
+	}
+
 	// 从数据库获取数据（支持分页和过滤）
-	logs, totalCount, err := s.database.GetDecisionLogsWithPagination(traderID, page, pageSize, actionFilter, statusFilter)
+	logs, totalCount, err := s.database.GetDecisionLogsWithPagination(traderID, page, pageSize, actionFilter, statusFilter, startTime, endTime)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("获取决策日志失败: %v", err),
@@ -1540,6 +1554,7 @@ func (s *Server) handleDecisions(c *gin.Context) {
 // convertDecisionLogToRecord 将数据库的 DecisionLog 转换为 logger.DecisionRecord
 func convertDecisionLogToRecord(log *config.DecisionLog) (*logger.DecisionRecord, error) {
 	record := &logger.DecisionRecord{
+		ID:                  log.ID,
 		Timestamp:           log.Timestamp,
 		CycleNumber:         log.CycleNumber,
 		SystemPrompt:        log.SystemPrompt,
@@ -1574,8 +1589,15 @@ func convertDecisionLogToRecord(log *config.DecisionLog) (*logger.DecisionRecord
 	}
 
 	// 解析 Decisions
-	// 优先从 Content 字段解析完整记录（包含正确的 Success 字段）
-	if log.Content != "" {
+	// 优先从 decisions 字段解析（新字段，性能最优）
+	if log.Decisions != "" {
+		var decisions []logger.DecisionAction
+		if err := json.Unmarshal([]byte(log.Decisions), &decisions); err == nil {
+			record.Decisions = decisions
+		}
+	}
+	// 如果 decisions 字段为空，回退到从 Content 字段解析（兼容旧数据）
+	if len(record.Decisions) == 0 && log.Content != "" {
 		var fullRecord logger.DecisionRecord
 		if err := json.Unmarshal([]byte(log.Content), &fullRecord); err == nil {
 			// 如果 Content 解析成功，使用其中的 Decisions（包含正确的 Success 字段）
@@ -1598,8 +1620,8 @@ func convertDecisionLogToRecord(log *config.DecisionLog) (*logger.DecisionRecord
 				}
 			}
 		}
-	} else if log.DecisionJSON != "" {
-		// 如果 Content 不存在，从 DecisionJSON 解析
+	} else if len(record.Decisions) == 0 && log.DecisionJSON != "" {
+		// 如果 decisions 和 Content 都不存在，从 DecisionJSON 解析
 		var decisions []logger.DecisionAction
 		// 尝试解析为数组格式（正确格式）
 		if err := json.Unmarshal([]byte(log.DecisionJSON), &decisions); err == nil {
@@ -1655,6 +1677,36 @@ func (s *Server) handleLatestDecisions(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, records)
+}
+
+// handleDecisionDetail 按需加载决策日志详细内容（包含长文本字段）
+func (s *Server) handleDecisionDetail(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的决策日志ID"})
+		return
+	}
+
+	// 从数据库获取详细内容
+	log, err := s.database.GetDecisionLogByID(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": fmt.Sprintf("获取决策日志失败: %v", err),
+		})
+		return
+	}
+
+	// 转换为前端格式
+	record, err := convertDecisionLogToRecord(log)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("转换决策日志失败: %v", err),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, record)
 }
 
 // handleStatistics 统计信息

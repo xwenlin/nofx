@@ -11,7 +11,7 @@ import {
     X,
     XCircle
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import useSWR from 'swr'
 import { useLanguage } from '../contexts/LanguageContext'
 import { t, type Language } from '../i18n/translations'
@@ -26,17 +26,152 @@ interface DecisionLogsProps {
 type ActionFilter = 'all' | 'has_trading' | 'wait_only' | 'open_only' | 'close_only'
 type StatusFilter = 'all' | 'decision_failed' | 'action_failed'
 
+type TimeGroup = 'none' | '2h' | '4h' | '8h' | '12h' | '1d' | '2d'
+
 export default function DecisionLogs({ traderId }: DecisionLogsProps) {
     const { language } = useLanguage()
     const [page, setPage] = useState<number>(1)
     const [pageSize, setPageSize] = useState<number>(50)
     const [actionFilter, setActionFilter] = useState<ActionFilter>('all')
     const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+    const [timeGroup, setTimeGroup] = useState<TimeGroup>('8h')
+    const [startTime, setStartTime] = useState<string>('')
+    const [endTime, setEndTime] = useState<string>('')
     const [selectedDecision, setSelectedDecision] = useState<DecisionRecord | null>(null)
 
+    // 初始化默认时间范围（最近8小时）
+    useEffect(() => {
+        if (!startTime && !endTime) {
+            const now = new Date()
+            const start = new Date(now)
+            start.setHours(start.getHours() - 8)
+
+            const formatForInput = (date: Date): string => {
+                const year = date.getFullYear()
+                const month = String(date.getMonth() + 1).padStart(2, '0')
+                const day = String(date.getDate()).padStart(2, '0')
+                const hour = String(date.getHours()).padStart(2, '0')
+                const minute = String(date.getMinutes()).padStart(2, '0')
+                return `${year}-${month}-${day}T${hour}:${minute}`
+            }
+
+            setStartTime(formatForInput(start))
+            setEndTime(formatForInput(now))
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []) // 只在组件挂载时执行一次
+
+    // 格式化时间为RFC3339格式
+    const formatTimeForAPI = (dateTime: string): string | undefined => {
+        if (!dateTime) return undefined
+        try {
+            // dateTime 格式: "YYYY-MM-DDTHH:mm" 或 "YYYY-MM-DDTHH:00"
+            // 直接转换为 RFC3339 格式，不进行时区转换（作为 UTC 时间）
+            // 因为用户选择的时间就是他们想要查询的时间，不需要时区转换
+            if (dateTime.includes('T')) {
+                const parts = dateTime.split('T')
+                if (parts.length !== 2) return undefined
+
+                const datePart = parts[0] // YYYY-MM-DD
+                const timePart = parts[1] // HH:mm 或 HH:00
+
+                // 确保时间部分有秒
+                let timeWithSeconds = timePart
+                if (timePart.split(':').length === 2) {
+                    timeWithSeconds = timePart + ':00'
+                }
+
+                // 组合成 RFC3339 格式: YYYY-MM-DDTHH:mm:ssZ
+                return `${datePart}T${timeWithSeconds}Z`
+            }
+            return undefined
+        } catch {
+            return undefined
+        }
+    }
+
+    // 处理时间分组选择
+    const handleTimeGroupChange = (group: TimeGroup) => {
+        setTimeGroup(group)
+        setPage(1)
+
+        if (group === 'none') {
+            setStartTime('')
+            setEndTime('')
+            return
+        }
+
+        const now = new Date()
+        let hours = 0
+
+        switch (group) {
+            case '2h':
+                hours = 2
+                break
+            case '4h':
+                hours = 4
+                break
+            case '8h':
+                hours = 8
+                break
+            case '12h':
+                hours = 12
+                break
+            case '1d':
+                hours = 24
+                break
+            case '2d':
+                hours = 48
+                break
+        }
+
+        // 计算开始时间（当前时间往前推N小时）
+        const start = new Date(now)
+        start.setHours(start.getHours() - hours)
+
+        // 结束时间就是当前时间
+        const end = new Date(now)
+
+        // 格式化为 datetime-local 格式 (YYYY-MM-DDTHH:mm)
+        const formatForInput = (date: Date): string => {
+            const year = date.getFullYear()
+            const month = String(date.getMonth() + 1).padStart(2, '0')
+            const day = String(date.getDate()).padStart(2, '0')
+            const hour = String(date.getHours()).padStart(2, '0')
+            const minute = String(date.getMinutes()).padStart(2, '0')
+            return `${year}-${month}-${day}T${hour}:${minute}`
+        }
+
+        setStartTime(formatForInput(start))
+        setEndTime(formatForInput(end))
+    }
+
+    // 处理时间输入变化
+    const handleTimeChange = (value: string, isStart: boolean) => {
+        // value 已经是格式化的 "YYYY-MM-DDTHH:00"，不需要再次取整
+        if (isStart) {
+            setStartTime(value)
+        } else {
+            setEndTime(value)
+        }
+        setPage(1)
+    }
+
     const { data: response, error, isLoading } = useSWR(
-        traderId ? `decisions-${traderId}-${page}-${pageSize}-${actionFilter}-${statusFilter}` : null,
-        () => api.getDecisions(traderId, page, pageSize, actionFilter, statusFilter),
+        traderId ? `decisions-${traderId}-${page}-${pageSize}-${actionFilter}-${statusFilter}-${startTime}-${endTime}` : null,
+        () => {
+            const start = formatTimeForAPI(startTime)
+            const end = formatTimeForAPI(endTime)
+            return api.getDecisions(
+                traderId,
+                page,
+                pageSize,
+                actionFilter,
+                statusFilter,
+                start,
+                end
+            )
+        },
         {
             refreshInterval: 30000,
             revalidateOnFocus: false,
@@ -64,6 +199,136 @@ export default function DecisionLogs({ traderId }: DecisionLogsProps) {
                     )}
                 </h2>
                 <div className="flex items-center gap-4 flex-wrap">
+                    {/* 时间过滤 - 放在最前面 */}
+                    <div className="flex items-center gap-2">
+                        <span className="text-sm" style={{ color: '#848E9C' }}>
+                            {t('filterByTime', language)}:
+                        </span>
+                        <select
+                            value={timeGroup}
+                            onChange={(e) => handleTimeGroupChange(e.target.value as TimeGroup)}
+                            className="rounded px-3 py-2 text-sm font-medium cursor-pointer transition-colors"
+                            style={{
+                                background: '#1E2329',
+                                border: '1px solid #2B3139',
+                                color: '#EAECEF',
+                            }}
+                        >
+                            <option value="none">{t('filterAll', language)}</option>
+                            <option value="2h">{t('last2Hours', language)}</option>
+                            <option value="4h">{t('last4Hours', language)}</option>
+                            <option value="8h">{t('last8Hours', language)}</option>
+                            <option value="12h">{t('last12Hours', language)}</option>
+                            <option value="1d">{t('last1Day', language)}</option>
+                            <option value="2d">{t('last2Days', language)}</option>
+                        </select>
+                        {timeGroup === 'none' && (
+                            <>
+                                {/* 开始时间选择器 */}
+                                <div className="flex items-center gap-1">
+                                    <input
+                                        type="date"
+                                        value={startTime ? startTime.split('T')[0] : ''}
+                                        onChange={(e) => {
+                                            const date = e.target.value
+                                            const hour = startTime ? startTime.split('T')[1]?.split(':')[0] || '00' : '00'
+                                            const roundedHour = String(Math.floor(parseInt(hour) / 2) * 2).padStart(2, '0')
+                                            handleTimeChange(`${date}T${roundedHour}:00`, true)
+                                        }}
+                                        className="rounded px-3 py-2 text-sm font-medium transition-colors"
+                                        style={{
+                                            background: '#1E2329',
+                                            border: '1px solid #2B3139',
+                                            color: '#EAECEF',
+                                            width: '140px',
+                                        }}
+                                    />
+                                    <select
+                                        value={startTime ? String(Math.floor(parseInt(startTime.split('T')[1]?.split(':')[0] || '0') / 2) * 2).padStart(2, '0') : '00'}
+                                        onChange={(e) => {
+                                            const hour = e.target.value
+                                            const date = startTime ? startTime.split('T')[0] : new Date().toISOString().split('T')[0]
+                                            handleTimeChange(`${date}T${hour}:00`, true)
+                                        }}
+                                        className="rounded px-2 py-2 text-sm font-medium cursor-pointer transition-colors"
+                                        style={{
+                                            background: '#1E2329',
+                                            border: '1px solid #2B3139',
+                                            color: '#EAECEF',
+                                            width: '70px',
+                                        }}
+                                    >
+                                        {[0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22].map(h => (
+                                            <option key={h} value={String(h).padStart(2, '0')}>
+                                                {String(h).padStart(2, '0')}:00
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <span className="text-sm" style={{ color: '#848E9C' }}>
+                                    {t('to', language)}
+                                </span>
+                                {/* 结束时间选择器 */}
+                                <div className="flex items-center gap-1">
+                                    <input
+                                        type="date"
+                                        value={endTime ? endTime.split('T')[0] : ''}
+                                        onChange={(e) => {
+                                            const date = e.target.value
+                                            const hour = endTime ? endTime.split('T')[1]?.split(':')[0] || '00' : '00'
+                                            const roundedHour = String(Math.floor(parseInt(hour) / 2) * 2).padStart(2, '0')
+                                            handleTimeChange(`${date}T${roundedHour}:00`, false)
+                                        }}
+                                        className="rounded px-3 py-2 text-sm font-medium transition-colors"
+                                        style={{
+                                            background: '#1E2329',
+                                            border: '1px solid #2B3139',
+                                            color: '#EAECEF',
+                                            width: '140px',
+                                        }}
+                                    />
+                                    <select
+                                        value={endTime ? String(Math.floor(parseInt(endTime.split('T')[1]?.split(':')[0] || '0') / 2) * 2).padStart(2, '0') : '00'}
+                                        onChange={(e) => {
+                                            const hour = e.target.value
+                                            const date = endTime ? endTime.split('T')[0] : new Date().toISOString().split('T')[0]
+                                            handleTimeChange(`${date}T${hour}:00`, false)
+                                        }}
+                                        className="rounded px-2 py-2 text-sm font-medium cursor-pointer transition-colors"
+                                        style={{
+                                            background: '#1E2329',
+                                            border: '1px solid #2B3139',
+                                            color: '#EAECEF',
+                                            width: '70px',
+                                        }}
+                                    >
+                                        {[0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22].map(h => (
+                                            <option key={h} value={String(h).padStart(2, '0')}>
+                                                {String(h).padStart(2, '0')}:00
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                                {(startTime || endTime) && (
+                                    <button
+                                        onClick={() => {
+                                            setStartTime('')
+                                            setEndTime('')
+                                            setPage(1)
+                                        }}
+                                        className="px-3 py-2 rounded text-sm font-medium transition-colors"
+                                        style={{
+                                            background: '#2B3139',
+                                            border: '1px solid #2B3139',
+                                            color: '#EAECEF',
+                                        }}
+                                    >
+                                        {t('clear', language)}
+                                    </button>
+                                )}
+                            </>
+                        )}
+                    </div>
                     <div className="flex items-center gap-2">
                         <Filter className="w-4 h-4" style={{ color: '#848E9C' }} />
                         <span className="text-sm" style={{ color: '#848E9C' }}>
@@ -300,7 +565,21 @@ export default function DecisionLogs({ traderId }: DecisionLogsProps) {
                                         return (
                                             <tr
                                                 key={i}
-                                                onClick={() => setSelectedDecision(decision)}
+                                                onClick={async () => {
+                                                    // 如果决策有 id 且缺少长文本字段，按需加载
+                                                    const decisionId = (decision as any).id
+                                                    if (decisionId && (!decision.system_prompt || !decision.input_prompt || !decision.cot_trace)) {
+                                                        try {
+                                                            const detail = await api.getDecisionDetail(decisionId)
+                                                            setSelectedDecision(detail)
+                                                        } catch (err) {
+                                                            console.error('加载决策详情失败:', err)
+                                                            setSelectedDecision(decision)
+                                                        }
+                                                    } else {
+                                                        setSelectedDecision(decision)
+                                                    }
+                                                }}
                                                 className="cursor-pointer transition-colors hover:bg-opacity-50"
                                                 style={{
                                                     background: isSelected ? 'rgba(99, 102, 241, 0.1)' : 'transparent',
@@ -416,6 +695,7 @@ function DecisionSidebar({
     language: Language
     onClose: () => void
 }) {
+    const [showSystemPrompt, setShowSystemPrompt] = useState(false)
     const [showInputPrompt, setShowInputPrompt] = useState(false)
     const [showCoT, setShowCoT] = useState(false)
     const [showExecutionLog, setShowExecutionLog] = useState(false)
@@ -456,6 +736,38 @@ function DecisionSidebar({
                     <X className="w-5 h-5" />
                 </button>
             </div>
+
+            {/* System Prompt - Collapsible */}
+            {decision.system_prompt && (
+                <div className="mb-6">
+                    <button
+                        onClick={() => setShowSystemPrompt(!showSystemPrompt)}
+                        className="flex items-center gap-2 text-sm transition-colors w-full text-left mb-2"
+                        style={{ color: '#6366F1' }}
+                    >
+                        <span className="font-semibold flex items-center gap-2">
+                            <Brain className="w-4 h-4" /> {t('systemPrompt', language)}
+                        </span>
+                        <span className="text-xs ml-auto">
+                            {showSystemPrompt
+                                ? t('collapse', language)
+                                : t('expand', language)}
+                        </span>
+                    </button>
+                    {showSystemPrompt && (
+                        <div
+                            className="rounded p-4 text-sm font-mono whitespace-pre-wrap max-h-96 overflow-y-auto"
+                            style={{
+                                background: '#0B0E11',
+                                border: '1px solid #2B3139',
+                                color: '#EAECEF',
+                            }}
+                        >
+                            {decision.system_prompt}
+                        </div>
+                    )}
+                </div>
+            )}
 
             {/* Input Prompt - Collapsible */}
             {decision.input_prompt && (

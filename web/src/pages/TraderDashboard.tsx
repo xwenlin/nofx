@@ -358,7 +358,7 @@ export default function TraderDashboard() {
             >
               {getModelDisplayName(
                 selectedTrader.ai_model.split('_').pop() ||
-                selectedTrader.ai_model
+                  selectedTrader.ai_model
               )}
             </span>
           </span>
@@ -442,293 +442,293 @@ export default function TraderDashboard() {
       {/* Tab Content */}
       {activeTab === 'overview' && (
         <>
-          {/* Account Overview */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-            <StatCard
-              title={t('totalEquity', language)}
-              value={`${account?.total_equity?.toFixed(2) || '0.00'} USDT`}
-              change={account?.total_pnl_pct || 0}
-              positive={(account?.total_pnl ?? 0) > 0}
-            />
-            <StatCard
-              title={t('availableBalance', language)}
-              value={`${account?.available_balance?.toFixed(2) || '0.00'} USDT`}
-              subtitle={`${account?.available_balance && account?.total_equity ? ((account.available_balance / account.total_equity) * 100).toFixed(1) : '0.0'}% ${t('free', language)}`}
-            />
-            <StatCard
-              title={t('totalPnL', language)}
-              value={`${account?.total_pnl !== undefined && account.total_pnl >= 0 ? '+' : ''}${account?.total_pnl?.toFixed(2) || '0.00'} USDT`}
-              change={account?.total_pnl_pct || 0}
-              positive={(account?.total_pnl ?? 0) >= 0}
-            />
-            <StatCard
-              title={t('positions', language)}
-              value={`${account?.position_count || 0}`}
-              subtitle={`${t('margin', language)}: ${account?.margin_used_pct?.toFixed(1) || '0.0'}%`}
-            />
+      {/* Account Overview */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+        <StatCard
+          title={t('totalEquity', language)}
+          value={`${account?.total_equity?.toFixed(2) || '0.00'} USDT`}
+          change={account?.total_pnl_pct || 0}
+          positive={(account?.total_pnl ?? 0) > 0}
+        />
+        <StatCard
+          title={t('availableBalance', language)}
+          value={`${account?.available_balance?.toFixed(2) || '0.00'} USDT`}
+          subtitle={`${account?.available_balance && account?.total_equity ? ((account.available_balance / account.total_equity) * 100).toFixed(1) : '0.0'}% ${t('free', language)}`}
+        />
+        <StatCard
+          title={t('totalPnL', language)}
+          value={`${account?.total_pnl !== undefined && account.total_pnl >= 0 ? '+' : ''}${account?.total_pnl?.toFixed(2) || '0.00'} USDT`}
+          change={account?.total_pnl_pct || 0}
+          positive={(account?.total_pnl ?? 0) >= 0}
+        />
+        <StatCard
+          title={t('positions', language)}
+          value={`${account?.position_count || 0}`}
+          subtitle={`${t('margin', language)}: ${account?.margin_used_pct?.toFixed(1) || '0.0'}%`}
+        />
+      </div>
+
+      {/* 主要内容区：左右分屏 */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        {/* 左侧：图表 + 持仓 */}
+        <div className="space-y-6">
+          {/* Equity Chart */}
+          <div className="animate-slide-in" style={{ animationDelay: '0.1s' }}>
+            <EquityChart traderId={selectedTrader.trader_id} />
           </div>
 
-          {/* 主要内容区：左右分屏 */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-            {/* 左侧：图表 + 持仓 */}
-            <div className="space-y-6">
-              {/* Equity Chart */}
-              <div className="animate-slide-in" style={{ animationDelay: '0.1s' }}>
-                <EquityChart traderId={selectedTrader.trader_id} />
-              </div>
-
-              {/* Current Positions */}
-              <div
-                className="binance-card p-6 animate-slide-in"
-                style={{ animationDelay: '0.15s' }}
+          {/* Current Positions */}
+          <div
+            className="binance-card p-6 animate-slide-in"
+            style={{ animationDelay: '0.15s' }}
+          >
+            <div className="flex items-center justify-between mb-5">
+              <h2
+                className="text-xl font-bold flex items-center gap-2"
+                style={{ color: '#EAECEF' }}
               >
-                <div className="flex items-center justify-between mb-5">
-                  <h2
-                    className="text-xl font-bold flex items-center gap-2"
-                    style={{ color: '#EAECEF' }}
-                  >
-                    <TrendingUp className="w-5 h-5" style={{ color: '#F0B90B' }} />
-                    {t('currentPositions', language)}
-                  </h2>
-                  {positions && positions.length > 0 && (
-                    <div
-                      className="text-xs px-3 py-1 rounded"
-                      style={{
-                        background: 'rgba(240, 185, 11, 0.1)',
-                        color: '#F0B90B',
-                        border: '1px solid rgba(240, 185, 11, 0.2)',
-                      }}
-                    >
-                      {positions.length} {t('active', language)}
-                    </div>
-                  )}
+                <TrendingUp className="w-5 h-5" style={{ color: '#F0B90B' }} />
+                {t('currentPositions', language)}
+              </h2>
+              {positions && positions.length > 0 && (
+                <div
+                  className="text-xs px-3 py-1 rounded"
+                  style={{
+                    background: 'rgba(240, 185, 11, 0.1)',
+                    color: '#F0B90B',
+                    border: '1px solid rgba(240, 185, 11, 0.2)',
+                  }}
+                >
+                  {positions.length} {t('active', language)}
                 </div>
-                {positions && positions.length > 0 ? (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead className="text-left border-b border-gray-800">
-                        <tr>
-                          <th className="pb-3 font-semibold text-gray-400">
-                            {t('symbol', language)}
-                          </th>
-                          <th className="pb-3 font-semibold text-gray-400">
-                            {t('side', language)}
-                          </th>
-                          <th className="pb-3 font-semibold text-gray-400">
-                            {t('entryPrice', language)}
-                          </th>
-                          <th className="pb-3 font-semibold text-gray-400">
-                            {t('markPrice', language)}
-                          </th>
-                          <th className="pb-3 font-semibold text-gray-400">
-                            {t('quantity', language)}
-                          </th>
-                          <th className="pb-3 font-semibold text-gray-400">
-                            {t('positionValue', language)}
-                          </th>
-                          <th className="pb-3 font-semibold text-gray-400">
-                            {t('leverage', language)}
-                          </th>
-                          <th className="pb-3 font-semibold text-gray-400">
-                            {t('unrealizedPnL', language)}
-                          </th>
-                          <th className="pb-3 font-semibold text-gray-400">
-                            {t('liqPrice', language)}
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {positions.map((pos, i) => (
-                          <tr
-                            key={i}
-                            className="border-b border-gray-800 last:border-0"
+              )}
+            </div>
+            {positions && positions.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="text-left border-b border-gray-800">
+                    <tr>
+                      <th className="pb-3 font-semibold text-gray-400">
+                        {t('symbol', language)}
+                      </th>
+                      <th className="pb-3 font-semibold text-gray-400">
+                        {t('side', language)}
+                      </th>
+                      <th className="pb-3 font-semibold text-gray-400">
+                        {t('entryPrice', language)}
+                      </th>
+                      <th className="pb-3 font-semibold text-gray-400">
+                        {t('markPrice', language)}
+                      </th>
+                      <th className="pb-3 font-semibold text-gray-400">
+                        {t('quantity', language)}
+                      </th>
+                      <th className="pb-3 font-semibold text-gray-400">
+                        {t('positionValue', language)}
+                      </th>
+                      <th className="pb-3 font-semibold text-gray-400">
+                        {t('leverage', language)}
+                      </th>
+                      <th className="pb-3 font-semibold text-gray-400">
+                        {t('unrealizedPnL', language)}
+                      </th>
+                      <th className="pb-3 font-semibold text-gray-400">
+                        {t('liqPrice', language)}
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {positions.map((pos, i) => (
+                      <tr
+                        key={i}
+                        className="border-b border-gray-800 last:border-0"
+                      >
+                        <td className="py-3 font-mono font-semibold">
+                          {pos.symbol}
+                        </td>
+                        <td className="py-3">
+                          <span
+                            className="px-2 py-1 rounded text-xs font-bold"
+                            style={
+                              pos.side === 'long'
+                                ? {
+                                    background: 'rgba(14, 203, 129, 0.1)',
+                                    color: '#0ECB81',
+                                  }
+                                : {
+                                    background: 'rgba(246, 70, 93, 0.1)',
+                                    color: '#F6465D',
+                                  }
+                            }
                           >
-                            <td className="py-3 font-mono font-semibold">
-                              {pos.symbol}
-                            </td>
-                            <td className="py-3">
-                              <span
-                                className="px-2 py-1 rounded text-xs font-bold"
-                                style={
-                                  pos.side === 'long'
-                                    ? {
-                                      background: 'rgba(14, 203, 129, 0.1)',
-                                      color: '#0ECB81',
-                                    }
-                                    : {
-                                      background: 'rgba(246, 70, 93, 0.1)',
-                                      color: '#F6465D',
-                                    }
-                                }
-                              >
-                                {t(
-                                  pos.side === 'long' ? 'long' : 'short',
-                                  language
-                                )}
-                              </span>
-                            </td>
-                            <td
-                              className="py-3 font-mono"
-                              style={{ color: '#EAECEF' }}
-                            >
-                              {pos.entry_price.toFixed(4)}
-                            </td>
-                            <td
-                              className="py-3 font-mono"
-                              style={{ color: '#EAECEF' }}
-                            >
-                              {pos.mark_price.toFixed(4)}
-                            </td>
-                            <td
-                              className="py-3 font-mono"
-                              style={{ color: '#EAECEF' }}
-                            >
-                              {pos.quantity.toFixed(4)}
-                            </td>
-                            <td
-                              className="py-3 font-mono font-bold"
-                              style={{ color: '#EAECEF' }}
-                            >
-                              {(pos.quantity * pos.mark_price).toFixed(2)} USDT
-                            </td>
-                            <td
-                              className="py-3 font-mono"
-                              style={{ color: '#F0B90B' }}
-                            >
-                              {pos.leverage}x
-                            </td>
-                            <td className="py-3 font-mono">
-                              <span
-                                style={{
-                                  color:
-                                    pos.unrealized_pnl >= 0 ? '#0ECB81' : '#F6465D',
-                                  fontWeight: 'bold',
-                                }}
-                              >
-                                {pos.unrealized_pnl >= 0 ? '+' : ''}
-                                {pos.unrealized_pnl.toFixed(2)} (
-                                {pos.unrealized_pnl_pct.toFixed(2)}%)
-                              </span>
-                            </td>
-                            <td
-                              className="py-3 font-mono"
-                              style={{ color: '#848E9C' }}
-                            >
-                              {pos.liquidation_price.toFixed(4)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <div className="text-center py-16" style={{ color: '#848E9C' }}>
-                    <div className="mb-4 opacity-50 flex justify-center">
-                      <PieChart className="w-16 h-16" />
-                    </div>
-                    <div className="text-lg font-semibold mb-2">
-                      {t('noPositions', language)}
-                    </div>
-                    <div className="text-sm">
-                      {t('noActivePositions', language)}
-                    </div>
+                            {t(
+                              pos.side === 'long' ? 'long' : 'short',
+                              language
+                            )}
+                          </span>
+                        </td>
+                        <td
+                          className="py-3 font-mono"
+                          style={{ color: '#EAECEF' }}
+                        >
+                          {pos.entry_price.toFixed(4)}
+                        </td>
+                        <td
+                          className="py-3 font-mono"
+                          style={{ color: '#EAECEF' }}
+                        >
+                          {pos.mark_price.toFixed(4)}
+                        </td>
+                        <td
+                          className="py-3 font-mono"
+                          style={{ color: '#EAECEF' }}
+                        >
+                          {pos.quantity.toFixed(4)}
+                        </td>
+                        <td
+                          className="py-3 font-mono font-bold"
+                          style={{ color: '#EAECEF' }}
+                        >
+                          {(pos.quantity * pos.mark_price).toFixed(2)} USDT
+                        </td>
+                        <td
+                          className="py-3 font-mono"
+                          style={{ color: '#F0B90B' }}
+                        >
+                          {pos.leverage}x
+                        </td>
+                        <td className="py-3 font-mono">
+                          <span
+                            style={{
+                              color:
+                                pos.unrealized_pnl >= 0 ? '#0ECB81' : '#F6465D',
+                              fontWeight: 'bold',
+                            }}
+                          >
+                            {pos.unrealized_pnl >= 0 ? '+' : ''}
+                            {pos.unrealized_pnl.toFixed(2)} (
+                            {pos.unrealized_pnl_pct.toFixed(2)}%)
+                          </span>
+                        </td>
+                        <td
+                          className="py-3 font-mono"
+                          style={{ color: '#848E9C' }}
+                        >
+                          {pos.liquidation_price.toFixed(4)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="text-center py-16" style={{ color: '#848E9C' }}>
+                <div className="mb-4 opacity-50 flex justify-center">
+                  <PieChart className="w-16 h-16" />
+                </div>
+                <div className="text-lg font-semibold mb-2">
+                  {t('noPositions', language)}
+                </div>
+                <div className="text-sm">
+                  {t('noActivePositions', language)}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 右侧：Recent Decisions */}
+        <div
+          className="binance-card p-6 animate-slide-in h-fit lg:sticky lg:top-24 lg:max-h-[calc(100vh-120px)]"
+          style={{ animationDelay: '0.2s' }}
+        >
+          <div
+            className="flex items-center justify-between mb-5 pb-4 border-b"
+            style={{ borderColor: '#2B3139' }}
+          >
+            <div className="flex items-center gap-3">
+              <div
+                className="w-10 h-10 rounded-xl flex items-center justify-center"
+                style={{
+                  background: 'linear-gradient(135deg, #6366F1 0%, #8B5CF6 100%)',
+                  boxShadow: '0 4px 14px rgba(99, 102, 241, 0.4)',
+                }}
+              >
+                <Brain className="w-5 h-5" style={{ color: '#FFFFFF' }} />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold" style={{ color: '#EAECEF' }}>
+                  {t('recentDecisions', language)}
+                </h2>
+                {decisions && decisions.length > 0 && (
+                  <div className="text-xs" style={{ color: '#848E9C' }}>
+                    {t('lastCycles', language, { count: decisions.length })}
                   </div>
                 )}
               </div>
             </div>
 
-            {/* 右侧：Recent Decisions */}
-            <div
-              className="binance-card p-6 animate-slide-in h-fit lg:sticky lg:top-24 lg:max-h-[calc(100vh-120px)]"
-              style={{ animationDelay: '0.2s' }}
-            >
-              <div
-                className="flex items-center justify-between mb-5 pb-4 border-b"
-                style={{ borderColor: '#2B3139' }}
+            {/* 显示数量选择器 */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs" style={{ color: '#848E9C' }}>
+                {language === 'zh' ? '显示' : 'Show'}:
+              </span>
+              <select
+                value={decisionLimit}
+                onChange={(e) => handleLimitChange(parseInt(e.target.value, 10))}
+                className="rounded px-2 py-1 text-xs font-medium cursor-pointer transition-colors"
+                style={{
+                  background: '#1E2329',
+                  border: '1px solid #2B3139',
+                  color: '#EAECEF',
+                }}
               >
-                <div className="flex items-center gap-3">
-                  <div
-                    className="w-10 h-10 rounded-xl flex items-center justify-center"
-                    style={{
-                      background: 'linear-gradient(135deg, #6366F1 0%, #8B5CF6 100%)',
-                      boxShadow: '0 4px 14px rgba(99, 102, 241, 0.4)',
-                    }}
-                  >
-                    <Brain className="w-5 h-5" style={{ color: '#FFFFFF' }} />
-                  </div>
-                  <div>
-                    <h2 className="text-xl font-bold" style={{ color: '#EAECEF' }}>
-                      {t('recentDecisions', language)}
-                    </h2>
-                    {decisions && decisions.length > 0 && (
-                      <div className="text-xs" style={{ color: '#848E9C' }}>
-                        {t('lastCycles', language, { count: decisions.length })}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* 显示数量选择器 */}
-                <div className="flex items-center gap-2">
-                  <span className="text-xs" style={{ color: '#848E9C' }}>
-                    {language === 'zh' ? '显示' : 'Show'}:
-                  </span>
-                  <select
-                    value={decisionLimit}
-                    onChange={(e) => handleLimitChange(parseInt(e.target.value, 10))}
-                    className="rounded px-2 py-1 text-xs font-medium cursor-pointer transition-colors"
-                    style={{
-                      background: '#1E2329',
-                      border: '1px solid #2B3139',
-                      color: '#EAECEF',
-                    }}
-                  >
-                    <option value={5}>5</option>
-                    <option value={10}>10</option>
-                    <option value={20}>20</option>
-                    <option value={50}>50</option>
-                  </select>
-                  <span className="text-xs" style={{ color: '#848E9C' }}>
-                    {language === 'zh' ? '条' : ''}
-                  </span>
-                </div>
-              </div>
-
-              <div
-                className="space-y-4 overflow-y-auto pr-2"
-                style={{ maxHeight: 'calc(100vh - 280px)' }}
-              >
-                {decisions && decisions.length > 0 ? (
-                  decisions.map((decision, i) => (
-                    <DecisionCard key={i} decision={decision} language={language} />
-                  ))
-                ) : (
-                  <div className="py-16 text-center">
-                    <div className="mb-4 opacity-30 flex justify-center">
-                      <Brain className="w-16 h-16" />
-                    </div>
-                    <div
-                      className="text-lg font-semibold mb-2"
-                      style={{ color: '#EAECEF' }}
-                    >
-                      {t('noDecisionsYet', language)}
-                    </div>
-                    <div className="text-sm" style={{ color: '#848E9C' }}>
-                      {t('aiDecisionsWillAppear', language)}
-                    </div>
-                  </div>
-                )}
-              </div>
+                <option value={5}>5</option>
+                <option value={10}>10</option>
+                <option value={20}>20</option>
+                <option value={50}>50</option>
+              </select>
+              <span className="text-xs" style={{ color: '#848E9C' }}>
+                {language === 'zh' ? '条' : ''}
+              </span>
             </div>
           </div>
 
-          {/* AI Learning & Performance Analysis */}
+          <div
+            className="space-y-4 overflow-y-auto pr-2"
+            style={{ maxHeight: 'calc(100vh - 280px)' }}
+          >
+            {decisions && decisions.length > 0 ? (
+              decisions.map((decision, i) => (
+                <DecisionCard key={i} decision={decision} language={language} />
+              ))
+            ) : (
+              <div className="py-16 text-center">
+                <div className="mb-4 opacity-30 flex justify-center">
+                  <Brain className="w-16 h-16" />
+                </div>
+                <div
+                  className="text-lg font-semibold mb-2"
+                  style={{ color: '#EAECEF' }}
+                >
+                  {t('noDecisionsYet', language)}
+                </div>
+                <div className="text-sm" style={{ color: '#848E9C' }}>
+                  {t('aiDecisionsWillAppear', language)}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* AI Learning & Performance Analysis */}
           <div
             className="mb-6 animate-slide-in"
             style={{ animationDelay: '0.3s' }}
           >
-            <AILearning traderId={selectedTrader.trader_id} />
-          </div>
+        <AILearning traderId={selectedTrader.trader_id} />
+      </div>
         </>
       )}
 
@@ -907,50 +907,50 @@ function DecisionCard({
             >
               {/* Action Header */}
               <div className="flex items-center gap-2 text-sm flex-wrap">
-                <span
-                  className="font-mono font-bold"
-                  style={{ color: '#EAECEF' }}
-                >
-                  {action.symbol}
-                </span>
-                <span
-                  className="px-2 py-0.5 rounded text-xs font-bold"
-                  style={
-                    action.action.includes('open')
-                      ? {
+              <span
+                className="font-mono font-bold"
+                style={{ color: '#EAECEF' }}
+              >
+                {action.symbol}
+              </span>
+              <span
+                className="px-2 py-0.5 rounded text-xs font-bold"
+                style={
+                  action.action.includes('open')
+                    ? {
                         background: 'rgba(96, 165, 250, 0.1)',
                         color: '#60a5fa',
                       }
-                      : {
+                    : {
                         background: 'rgba(240, 185, 11, 0.1)',
                         color: '#F0B90B',
                       }
-                  }
+                }
+              >
+                {action.action}
+              </span>
+              {action.leverage > 0 && (
+                <span style={{ color: '#F0B90B' }}>{action.leverage}x</span>
+              )}
+              {action.price > 0 && (
+                <span
+                  className="font-mono text-xs"
+                  style={{ color: '#848E9C' }}
                 >
-                  {action.action}
+                  @{action.price.toFixed(4)}
                 </span>
-                {action.leverage > 0 && (
-                  <span style={{ color: '#F0B90B' }}>{action.leverage}x</span>
+              )}
+              <span style={{ color: action.success ? '#0ECB81' : '#F6465D' }}>
+                {action.success ? (
+                  <Check className="w-3 h-3 inline" />
+                ) : (
+                  <X className="w-3 h-3 inline" />
                 )}
-                {action.price > 0 && (
-                  <span
-                    className="font-mono text-xs"
-                    style={{ color: '#848E9C' }}
-                  >
-                    @{action.price.toFixed(4)}
-                  </span>
-                )}
-                <span style={{ color: action.success ? '#0ECB81' : '#F6465D' }}>
-                  {action.success ? (
-                    <Check className="w-3 h-3 inline" />
-                  ) : (
-                    <X className="w-3 h-3 inline" />
-                  )}
+              </span>
+              {action.error && (
+                <span className="text-xs ml-2" style={{ color: '#F6465D' }}>
+                  {action.error}
                 </span>
-                {action.error && (
-                  <span className="text-xs ml-2" style={{ color: '#F6465D' }}>
-                    {action.error}
-                  </span>
                 )}
               </div>
               {/* Reasoning */}
@@ -988,7 +988,7 @@ function DecisionCard({
             style={{
               color:
                 decision.candidate_coins &&
-                  decision.candidate_coins.length === 0
+                decision.candidate_coins.length === 0
                   ? '#F6465D'
                   : '#848E9C',
             }}

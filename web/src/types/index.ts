@@ -55,8 +55,10 @@ export interface DecisionAction {
 
 // 决策记录
 export interface DecisionRecord {
+  id?: number // 决策日志ID（用于按需加载）
   timestamp: string
   cycle_number: number
+  system_prompt?: string // 系统提示词（按需加载）
   input_prompt: string
   cot_trace: string
   decision_json: string

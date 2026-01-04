@@ -331,7 +331,9 @@ export const api = {
     page: number = 1,
     pageSize: number = 50,
     actionFilter: string = 'all',
-    statusFilter: string = 'all'
+    statusFilter: string = 'all',
+    startTime: string | undefined = undefined,
+    endTime: string | undefined = undefined
   ): Promise<{
     data: DecisionRecord[]
     total: number
@@ -347,12 +349,28 @@ export const api = {
     if (statusFilter !== 'all') {
       params.append('status_filter', statusFilter)
     }
+    if (startTime) {
+      params.append('start_time', startTime)
+    }
+    if (endTime) {
+      params.append('end_time', endTime)
+    }
 
     const res = await httpClient.get(
       `${API_BASE}/decisions?${params}`,
       getAuthHeaders()
     )
     if (!res.ok) throw new Error('获取决策日志失败')
+    return res.json()
+  },
+
+  // 按需加载决策日志详细内容（包含长文本字段）
+  async getDecisionDetail(id: number): Promise<DecisionRecord> {
+    const res = await httpClient.get(
+      `${API_BASE}/decisions/${id}`,
+      getAuthHeaders()
+    )
+    if (!res.ok) throw new Error('获取决策日志详情失败')
     return res.json()
   },
 
