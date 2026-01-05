@@ -186,11 +186,84 @@ func (l *DecisionLogger) GetLatestRecords(n int) ([]*DecisionRecord, error) {
 	var records []*DecisionRecord
 	// 数据库返回的是按时间倒序（最新的在前）
 	for _, logEntry := range logs {
-		var record DecisionRecord
-		if err := json.Unmarshal([]byte(logEntry.Content), &record); err != nil {
-			continue
+		record := &DecisionRecord{
+			ID:                  logEntry.ID,
+			Timestamp:           logEntry.Timestamp,
+			CycleNumber:         logEntry.CycleNumber,
+			SystemPrompt:        logEntry.SystemPrompt,
+			InputPrompt:         logEntry.InputPrompt,
+			CoTTrace:            logEntry.CoTTrace,
+			DecisionJSON:        logEntry.DecisionJSON,
+			Success:             logEntry.Success,
+			ErrorMessage:        logEntry.Error,
+			AIRequestDurationMs: logEntry.AIRequestDurationMs,
 		}
-		records = append(records, &record)
+
+		// 解析 AccountState
+		if logEntry.AccountState != "" {
+			if err := json.Unmarshal([]byte(logEntry.AccountState), &record.AccountState); err != nil {
+				record.AccountState = AccountSnapshot{}
+			}
+		}
+
+		// 解析 Positions
+		if logEntry.Positions != "" {
+			if err := json.Unmarshal([]byte(logEntry.Positions), &record.Positions); err != nil {
+				record.Positions = []PositionSnapshot{}
+			}
+		}
+
+		// 解析 ExecutionLog
+		if logEntry.ExecutionLog != "" {
+			if err := json.Unmarshal([]byte(logEntry.ExecutionLog), &record.ExecutionLog); err != nil {
+				record.ExecutionLog = []string{}
+			}
+		}
+
+		// 解析 Decisions - 优先从 decisions 字段解析（新字段）
+		if logEntry.Decisions != "" {
+			var decisions []DecisionAction
+			if err := json.Unmarshal([]byte(logEntry.Decisions), &decisions); err == nil {
+				record.Decisions = decisions
+			}
+		}
+		// 如果 decisions 字段为空，回退到从 Content 字段解析（兼容旧数据）
+		if len(record.Decisions) == 0 && logEntry.Content != "" {
+			var fullRecord DecisionRecord
+			if err := json.Unmarshal([]byte(logEntry.Content), &fullRecord); err == nil {
+				record.Decisions = fullRecord.Decisions
+			} else if logEntry.DecisionJSON != "" {
+				// 如果 Content 解析失败，回退到从 DecisionJSON 解析
+				var decisions []DecisionAction
+				if err := json.Unmarshal([]byte(logEntry.DecisionJSON), &decisions); err == nil {
+					record.Decisions = decisions
+				} else {
+					// 尝试解析为对象格式（兼容旧数据）
+					var decisionData struct {
+						Decisions []DecisionAction `json:"decisions"`
+					}
+					if err2 := json.Unmarshal([]byte(logEntry.DecisionJSON), &decisionData); err2 == nil {
+						record.Decisions = decisionData.Decisions
+					}
+				}
+			}
+		} else if len(record.Decisions) == 0 && logEntry.DecisionJSON != "" {
+			// 如果 decisions 和 Content 都不存在，从 DecisionJSON 解析
+			var decisions []DecisionAction
+			if err := json.Unmarshal([]byte(logEntry.DecisionJSON), &decisions); err == nil {
+				record.Decisions = decisions
+			} else {
+				// 尝试解析为对象格式（兼容旧数据）
+				var decisionData struct {
+					Decisions []DecisionAction `json:"decisions"`
+				}
+				if err2 := json.Unmarshal([]byte(logEntry.DecisionJSON), &decisionData); err2 == nil {
+					record.Decisions = decisionData.Decisions
+				}
+			}
+		}
+
+		records = append(records, record)
 	}
 
 	// 反转数组，让时间从旧到新排列（用于图表显示等需要时间正序的场景）
