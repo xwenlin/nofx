@@ -1352,7 +1352,7 @@ func validateDecision(d *Decision, ctx *Context, tradingMode string) error {
 			}
 		}
 
-		// 验证风险回报比（根据交易模式：正常模式≥2，保守模式≥3）
+		// 验证盈亏比（根据交易模式：正常模式≥2，保守模式≥3）
 		// 使用市场标记价格作为入场价（marketData 和 markPrice 已在前面获取）
 		entryPrice := markPrice
 
@@ -1385,9 +1385,11 @@ func validateDecision(d *Decision, ctx *Context, tradingMode string) error {
 			modeName = "正常模式"
 		}
 
-		// 硬约束：风险回报比必须满足模式要求
-		if riskRewardRatio < minRiskRewardRatio {
-			return fmt.Errorf("风险回报比过低(%.2f:1)，%s要求必须≥%.1f:1 [入场价:%.4f 止损:%.4f 止盈:%.4f]",
+		// 硬约束：盈亏比必须满足模式要求
+		// 增加微小容差（0.01）以应对浮点数精度问题
+		const riskRewardTolerance = 0.01
+		if riskRewardRatio < minRiskRewardRatio-riskRewardTolerance {
+			return fmt.Errorf("盈亏比过低(%.2f:1)，%s要求必须≥%.1f:1 [入场价:%.4f 止损:%.4f 止盈:%.4f]",
 				riskRewardRatio, modeName, minRiskRewardRatio, entryPrice, d.StopLoss, d.TakeProfit)
 		}
 	}
