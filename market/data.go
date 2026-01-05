@@ -1,6 +1,7 @@
 package market
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/adshao/go-binance/v2/futures"
 )
 
 // FundingRateCache 资金费率缓存结构
@@ -122,6 +125,13 @@ func Get(symbol string) (*Data, error) {
 	// 获取Funding Rate
 	fundingRate, _ := getFundingRate(symbol)
 
+	// 获取标记价格
+	markPrice, _ := getMarkPrice(symbol)
+	if markPrice == 0 {
+		// 如果获取标记价格失败，使用当前价格作为回退
+		markPrice = currentPrice
+	}
+
 	// 计算各时间框架的系列数据
 	intradayData := calculateIntradaySeries(klines3m)   // 3分钟序列
 	series15m := calculateIntradaySeries(klines15m)     // 15分钟序列
@@ -131,6 +141,7 @@ func Get(symbol string) (*Data, error) {
 	return &Data{
 		Symbol:            symbol,
 		CurrentPrice:      currentPrice,
+		MarkPrice:         markPrice,
 		PriceChange1h:     priceChange1h,
 		PriceChange4h:     priceChange4h,
 		CurrentEMA20:      currentEMA20,
@@ -790,35 +801,24 @@ func getFundingRate(symbol string) (float64, error) {
 	}
 
 	// 缓存过期或不存在，调用 API
-	url := fmt.Sprintf("https://fapi.binance.com/fapi/v1/premiumIndex?symbol=%s", symbol)
-
-	apiClient := NewAPIClient()
-	resp, err := apiClient.client.Get(url)
+	// 使用 go-binance/v2 库的 PremiumIndexService（无需认证的公开 API）
+	client := futures.NewClient("", "") // 空字符串表示无需认证
+	premiumIndexes, err := client.NewPremiumIndexService().
+		Symbol(symbol).
+		Do(context.Background())
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("获取资金费率失败: %w", err)
 	}
-	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	if len(premiumIndexes) == 0 {
+		return 0, fmt.Errorf("未找到 %s 的资金费率数据", symbol)
+	}
+
+	// 解析资金费率
+	rate, err := strconv.ParseFloat(premiumIndexes[0].LastFundingRate, 64)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("解析资金费率失败: %w", err)
 	}
-
-	var result struct {
-		Symbol          string `json:"symbol"`
-		MarkPrice       string `json:"markPrice"`
-		IndexPrice      string `json:"indexPrice"`
-		LastFundingRate string `json:"lastFundingRate"`
-		NextFundingTime int64  `json:"nextFundingTime"`
-		InterestRate    string `json:"interestRate"`
-		Time            int64  `json:"time"`
-	}
-
-	if err := json.Unmarshal(body, &result); err != nil {
-		return 0, err
-	}
-
-	rate, _ := strconv.ParseFloat(result.LastFundingRate, 64)
 
 	// 更新缓存
 	fundingRateMap.Store(symbol, &FundingRateCache{
@@ -827,6 +827,30 @@ func getFundingRate(symbol string) (float64, error) {
 	})
 
 	return rate, nil
+}
+
+// getMarkPrice 获取标记价格（用于计算未实现盈亏）
+func getMarkPrice(symbol string) (float64, error) {
+	// 使用 go-binance/v2 库的 PremiumIndexService（无需认证的公开 API）
+	client := futures.NewClient("", "") // 空字符串表示无需认证
+	premiumIndexes, err := client.NewPremiumIndexService().
+		Symbol(symbol).
+		Do(context.Background())
+	if err != nil {
+		return 0, fmt.Errorf("获取标记价格失败: %w", err)
+	}
+
+	if len(premiumIndexes) == 0 {
+		return 0, fmt.Errorf("未找到 %s 的标记价格数据", symbol)
+	}
+
+	// 解析标记价格
+	markPrice, err := strconv.ParseFloat(premiumIndexes[0].MarkPrice, 64)
+	if err != nil {
+		return 0, fmt.Errorf("解析标记价格失败: %w", err)
+	}
+
+	return markPrice, nil
 }
 
 // Format 格式化输出市场数据

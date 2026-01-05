@@ -678,7 +678,7 @@ func buildUserPrompt(ctx *Context) string {
 				takeProfitStr = fmt.Sprintf("%.4f", pos.TakeProfit)
 			}
 
-			sb.WriteString(fmt.Sprintf("  - %s | %s | 入场价%.4f | 当前价%.4f | 数量%.4f | 仓位价值%.2f USDT | 盈亏%+.2f%% | 盈亏金额%+.2f USDT | 最高收益率%.2f%% | 杠杆%dx | 保证金%.0f | 强平价%.4f | 止损价%s | 止盈价%s | 持仓时长%s\n",
+			sb.WriteString(fmt.Sprintf("  - %s | %s | 入场价%.4f | 标记价%.4f | 数量%.4f | 仓位价值%.2f USDT | 盈亏%+.2f%% | 盈亏金额%+.2f USDT | 最高收益率%.2f%% | 杠杆%dx | 保证金%.0f | 强平价%.4f | 止损价%s | 止盈价%s | 持仓时长%s\n",
 				pos.Symbol, strings.ToUpper(pos.Side), pos.EntryPrice, pos.MarkPrice, pos.Quantity,
 				positionValue, pos.UnrealizedPnLPct, pos.UnrealizedPnL, pos.PeakPnLPct,
 				pos.Leverage, pos.MarginUsed, pos.LiquidationPrice, stopLossStr, takeProfitStr, holdingDuration))
@@ -878,7 +878,8 @@ func buildUserPrompt(ctx *Context) string {
 		rhythmStatus := calculateSymbolRhythm(symbol, ctx)
 
 		sb.WriteString("**战场环境**:\n")
-		sb.WriteString(fmt.Sprintf("- 当前价格: %.4f\n", data.CurrentPrice))
+		sb.WriteString(fmt.Sprintf("- 当前价格 (Last): %.4f\n", data.CurrentPrice))
+		sb.WriteString(fmt.Sprintf("- 标记价格 (Mark): %.4f\n", data.MarkPrice))
 		sb.WriteString(fmt.Sprintf("- 4H_ATR(14): %.4f\n", atr4H))
 		sb.WriteString(fmt.Sprintf("- 资金费率: %.6f\n", data.FundingRate))
 		sb.WriteString(fmt.Sprintf("- 1H_OI_Change: %.2f%%\n", oi1HChange))
@@ -1312,44 +1313,48 @@ func validateDecision(d *Decision, ctx *Context, tradingMode string) error {
 			return fmt.Errorf("止损和止盈必须大于0")
 		}
 
-		// 获取市场当前价用于验证
+		// 获取市场标记价格用于验证
 		marketData, ok := ctx.MarketDataMap[d.Symbol]
 		if !ok || marketData == nil {
 			return fmt.Errorf("无法获取 %s 的市场数据，无法验证止损止盈", d.Symbol)
 		}
-		currentPrice := marketData.CurrentPrice
-		if currentPrice <= 0 {
-			return fmt.Errorf("%s 当前价格无效(%.4f)，无法验证止损止盈", d.Symbol, currentPrice)
+		markPrice := marketData.MarkPrice
+		if markPrice <= 0 {
+			// 如果标记价格无效，回退到当前价格
+			markPrice = marketData.CurrentPrice
+		}
+		if markPrice <= 0 {
+			return fmt.Errorf("%s 标记价格无效(%.4f)，无法验证止损止盈", d.Symbol, markPrice)
 		}
 
-		// 验证止损止盈的合理性（考虑市场价）
+		// 验证止损止盈的合理性（考虑标记价格）
 		if d.Action == "open_long" {
-			// 做多：止损价 < 当前价 < 止盈价
+			// 做多：止损价 < 标记价 < 止盈价
 			if d.StopLoss >= d.TakeProfit {
 				return fmt.Errorf("做多时止损价必须小于止盈价 (止损:%.4f >= 止盈:%.4f)", d.StopLoss, d.TakeProfit)
 			}
-			if d.StopLoss >= currentPrice {
-				return fmt.Errorf("做多时止损价必须小于当前价，否则会立即触发 (止损:%.4f >= 当前价:%.4f)", d.StopLoss, currentPrice)
+			if d.StopLoss >= markPrice {
+				return fmt.Errorf("做多时止损价必须小于标记价，否则会立即触发 (止损:%.4f >= 标记价:%.4f)", d.StopLoss, markPrice)
 			}
-			if d.TakeProfit <= currentPrice {
-				return fmt.Errorf("做多时止盈价必须大于当前价，否则无法止盈 (止盈:%.4f <= 当前价:%.4f)", d.TakeProfit, currentPrice)
+			if d.TakeProfit <= markPrice {
+				return fmt.Errorf("做多时止盈价必须大于标记价，否则无法止盈 (止盈:%.4f <= 标记价:%.4f)", d.TakeProfit, markPrice)
 			}
 		} else {
-			// 做空：止盈价 < 当前价 < 止损价
+			// 做空：止盈价 < 标记价 < 止损价
 			if d.StopLoss <= d.TakeProfit {
 				return fmt.Errorf("做空时止损价必须大于止盈价 (止损:%.4f <= 止盈:%.4f)", d.StopLoss, d.TakeProfit)
 			}
-			if d.StopLoss <= currentPrice {
-				return fmt.Errorf("做空时止损价必须大于当前价，否则会立即触发 (止损:%.4f <= 当前价:%.4f)", d.StopLoss, currentPrice)
+			if d.StopLoss <= markPrice {
+				return fmt.Errorf("做空时止损价必须大于标记价，否则会立即触发 (止损:%.4f <= 标记价:%.4f)", d.StopLoss, markPrice)
 			}
-			if d.TakeProfit >= currentPrice {
-				return fmt.Errorf("做空时止盈价必须小于当前价，否则无法止盈 (止盈:%.4f >= 当前价:%.4f)", d.TakeProfit, currentPrice)
+			if d.TakeProfit >= markPrice {
+				return fmt.Errorf("做空时止盈价必须小于标记价，否则无法止盈 (止盈:%.4f >= 标记价:%.4f)", d.TakeProfit, markPrice)
 			}
 		}
 
 		// 验证风险回报比（根据交易模式：正常模式≥2，保守模式≥3）
-		// 使用市场当前价作为入场价（marketData 和 currentPrice 已在前面获取）
-		entryPrice := currentPrice
+		// 使用市场标记价格作为入场价（marketData 和 markPrice 已在前面获取）
+		entryPrice := markPrice
 
 		// 根据提示词公式计算盈亏比：(止盈价 - 入场价)的绝对值 / (入场价 - 止损价)的绝对值
 		var riskRewardRatio float64

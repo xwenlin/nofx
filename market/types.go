@@ -6,6 +6,7 @@ import "time"
 type Data struct {
 	Symbol            string
 	CurrentPrice      float64
+	MarkPrice         float64 // 标记价格（用于计算未实现盈亏）
 	PriceChange1h     float64 // 1小时价格变化百分比
 	PriceChange4h     float64 // 4小时价格变化百分比
 	CurrentEMA20      float64

@@ -1172,24 +1172,34 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	posKey := decision.Symbol + "_long"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 
-	// ⚠️ 关键：开仓后立即查询持仓，获取实际入场价（entryPrice）
+	// ⚠️ 关键：开仓后立即查询持仓，获取实际入场价（entryPrice）和标记价格（markPrice）
 	// 订单对象可能不包含成交价，从持仓中获取最准确
 	var actualEntryPrice float64
+	var markPrice float64
 	positions, err = at.trader.GetPositions()
 	if err == nil {
 		for _, pos := range positions {
 			if symbol, ok := pos["symbol"].(string); ok && symbol == decision.Symbol {
 				if side, ok := pos["side"].(string); ok && side == "long" {
+					// 获取实际入场价
 					if ep, ok := pos["entryPrice"].(float64); ok && ep > 0 {
 						actualEntryPrice = ep
-						log.Printf("  📊 获取实际入场价: %.4f (市场价: %.4f)", actualEntryPrice, marketData.CurrentPrice)
-						break
 					} else if epStr, ok := pos["entryPrice"].(string); ok {
 						if ep, err := strconv.ParseFloat(epStr, 64); err == nil && ep > 0 {
 							actualEntryPrice = ep
-							log.Printf("  📊 获取实际入场价: %.4f (市场价: %.4f)", actualEntryPrice, marketData.CurrentPrice)
-							break
 						}
+					}
+					// 获取标记价格（优先使用持仓返回的标记价格）
+					if mp, ok := pos["markPrice"].(float64); ok && mp > 0 {
+						markPrice = mp
+					} else if mpStr, ok := pos["markPrice"].(string); ok {
+						if mp, err := strconv.ParseFloat(mpStr, 64); err == nil && mp > 0 {
+							markPrice = mp
+						}
+					}
+					if actualEntryPrice > 0 && markPrice > 0 {
+						log.Printf("  📊 获取实际入场价: %.4f, 标记价格: %.4f (市场价: %.4f)", actualEntryPrice, markPrice, marketData.CurrentPrice)
+						break
 					}
 				}
 			}
@@ -1202,18 +1212,23 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 		log.Printf("  ⚠️ 未能获取实际入场价，使用市场价: %.4f", actualEntryPrice)
 	}
 
-	// 使用实际入场价和当前价验证止损/止盈价格合理性
-	// 多仓：止损 < 入场价 且 < 当前价，止盈 > 入场价 且 > 当前价
-	currentPrice := marketData.CurrentPrice
+	// 如果未能从持仓获取标记价格，使用市场数据中的标记价格
+	if markPrice <= 0 {
+		markPrice = marketData.MarkPrice
+		if markPrice <= 0 {
+			// 如果标记价格仍然无效，回退到当前价格
+			markPrice = marketData.CurrentPrice
+		}
+	}
 
 	if decision.StopLoss > 0 {
-		// 多仓止损必须 < 入场价 且 < 当前价
+		// 多仓止损必须 < 入场价 且 < 标记价
 		if decision.StopLoss >= actualEntryPrice {
 			log.Printf("  ❌ 多仓止损价(%.4f) >= 入场价(%.4f)，拒绝设置止损", decision.StopLoss, actualEntryPrice)
-		} else if decision.StopLoss >= currentPrice {
-			log.Printf("  ❌ 多仓止损价(%.4f) >= 当前价(%.4f)，可能立即触发，拒绝设置止损", decision.StopLoss, currentPrice)
+		} else if decision.StopLoss >= markPrice {
+			log.Printf("  ❌ 多仓止损价(%.4f) >= 标记价(%.4f)，可能立即触发，拒绝设置止损", decision.StopLoss, markPrice)
 		} else {
-			log.Printf("  ✅ 止损价验证通过: %.4f < 入场价(%.4f) 且 < 当前价(%.4f)", decision.StopLoss, actualEntryPrice, currentPrice)
+			log.Printf("  ✅ 止损价验证通过: %.4f < 入场价(%.4f) 且 < 标记价(%.4f)", decision.StopLoss, actualEntryPrice, markPrice)
 			// 只有验证通过才设置止损
 			if err := at.trader.SetStopLoss(decision.Symbol, "LONG", quantity, decision.StopLoss); err != nil {
 				log.Printf("  ⚠ 设置止损失败: %v", err)
@@ -1222,13 +1237,13 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	}
 
 	if decision.TakeProfit > 0 {
-		// 多仓止盈必须 > 入场价 且 > 当前价
+		// 多仓止盈必须 > 入场价 且 > 标记价
 		if decision.TakeProfit <= actualEntryPrice {
 			log.Printf("  ❌ 多仓止盈价(%.4f) <= 入场价(%.4f)，无法止盈，拒绝设置止盈", decision.TakeProfit, actualEntryPrice)
-		} else if decision.TakeProfit <= currentPrice {
-			log.Printf("  ❌ 多仓止盈价(%.4f) <= 当前价(%.4f)，无法止盈，拒绝设置止盈", decision.TakeProfit, currentPrice)
+		} else if decision.TakeProfit <= markPrice {
+			log.Printf("  ❌ 多仓止盈价(%.4f) <= 标记价(%.4f)，无法止盈，拒绝设置止盈", decision.TakeProfit, markPrice)
 		} else {
-			log.Printf("  ✅ 止盈价验证通过: %.4f > 入场价(%.4f) 且 > 当前价(%.4f)", decision.TakeProfit, actualEntryPrice, currentPrice)
+			log.Printf("  ✅ 止盈价验证通过: %.4f > 入场价(%.4f) 且 > 标记价(%.4f)", decision.TakeProfit, actualEntryPrice, markPrice)
 			// 只有验证通过才设置止盈
 			if err := at.trader.SetTakeProfit(decision.Symbol, "LONG", quantity, decision.TakeProfit); err != nil {
 				log.Printf("  ⚠ 设置止盈失败: %v", err)
@@ -1335,24 +1350,34 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	posKey := decision.Symbol + "_short"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 
-	// ⚠️ 关键：开仓后立即查询持仓，获取实际入场价（entryPrice）
+	// ⚠️ 关键：开仓后立即查询持仓，获取实际入场价（entryPrice）和标记价格（markPrice）
 	// 订单对象可能不包含成交价，从持仓中获取最准确
 	var actualEntryPrice float64
+	var markPrice float64
 	positions, err = at.trader.GetPositions()
 	if err == nil {
 		for _, pos := range positions {
 			if symbol, ok := pos["symbol"].(string); ok && symbol == decision.Symbol {
 				if side, ok := pos["side"].(string); ok && side == "short" {
+					// 获取实际入场价
 					if ep, ok := pos["entryPrice"].(float64); ok && ep > 0 {
 						actualEntryPrice = ep
-						log.Printf("  📊 获取实际入场价: %.4f (市场价: %.4f)", actualEntryPrice, marketData.CurrentPrice)
-						break
 					} else if epStr, ok := pos["entryPrice"].(string); ok {
 						if ep, err := strconv.ParseFloat(epStr, 64); err == nil && ep > 0 {
 							actualEntryPrice = ep
-							log.Printf("  📊 获取实际入场价: %.4f (市场价: %.4f)", actualEntryPrice, marketData.CurrentPrice)
-							break
 						}
+					}
+					// 获取标记价格（优先使用持仓返回的标记价格）
+					if mp, ok := pos["markPrice"].(float64); ok && mp > 0 {
+						markPrice = mp
+					} else if mpStr, ok := pos["markPrice"].(string); ok {
+						if mp, err := strconv.ParseFloat(mpStr, 64); err == nil && mp > 0 {
+							markPrice = mp
+						}
+					}
+					if actualEntryPrice > 0 && markPrice > 0 {
+						log.Printf("  📊 获取实际入场价: %.4f, 标记价格: %.4f (市场价: %.4f)", actualEntryPrice, markPrice, marketData.CurrentPrice)
+						break
 					}
 				}
 			}
@@ -1365,18 +1390,23 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 		log.Printf("  ⚠️ 未能获取实际入场价，使用市场价: %.4f", actualEntryPrice)
 	}
 
-	// 使用实际入场价和当前价验证止损/止盈价格合理性
-	// 空仓：止损 > 入场价 且 > 当前价，止盈 < 入场价 且 < 当前价
-	currentPrice := marketData.CurrentPrice
+	// 如果未能从持仓获取标记价格，使用市场数据中的标记价格
+	if markPrice <= 0 {
+		markPrice = marketData.MarkPrice
+		if markPrice <= 0 {
+			// 如果标记价格仍然无效，回退到当前价格
+			markPrice = marketData.CurrentPrice
+		}
+	}
 
 	if decision.StopLoss > 0 {
-		// 空仓止损必须 > 入场价 且 > 当前价
+		// 空仓止损必须 > 入场价 且 > 标记价
 		if decision.StopLoss <= actualEntryPrice {
 			log.Printf("  ❌ 空仓止损价(%.4f) <= 入场价(%.4f)，拒绝设置止损", decision.StopLoss, actualEntryPrice)
-		} else if decision.StopLoss <= currentPrice {
-			log.Printf("  ❌ 空仓止损价(%.4f) <= 当前价(%.4f)，可能立即触发，拒绝设置止损", decision.StopLoss, currentPrice)
+		} else if decision.StopLoss <= markPrice {
+			log.Printf("  ❌ 空仓止损价(%.4f) <= 标记价(%.4f)，可能立即触发，拒绝设置止损", decision.StopLoss, markPrice)
 		} else {
-			log.Printf("  ✅ 止损价验证通过: %.4f > 入场价(%.4f) 且 > 当前价(%.4f)", decision.StopLoss, actualEntryPrice, currentPrice)
+			log.Printf("  ✅ 止损价验证通过: %.4f > 入场价(%.4f) 且 > 标记价(%.4f)", decision.StopLoss, actualEntryPrice, markPrice)
 			// 只有验证通过才设置止损
 			if err := at.trader.SetStopLoss(decision.Symbol, "SHORT", quantity, decision.StopLoss); err != nil {
 				log.Printf("  ⚠ 设置止损失败: %v", err)
@@ -1385,13 +1415,13 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	}
 
 	if decision.TakeProfit > 0 {
-		// 空仓止盈必须 < 入场价 且 < 当前价
+		// 空仓止盈必须 < 入场价 且 < 标记价
 		if decision.TakeProfit >= actualEntryPrice {
 			log.Printf("  ❌ 空仓止盈价(%.4f) >= 入场价(%.4f)，无法止盈，拒绝设置止盈", decision.TakeProfit, actualEntryPrice)
-		} else if decision.TakeProfit >= currentPrice {
-			log.Printf("  ❌ 空仓止盈价(%.4f) >= 当前价(%.4f)，无法止盈，拒绝设置止盈", decision.TakeProfit, currentPrice)
+		} else if decision.TakeProfit >= markPrice {
+			log.Printf("  ❌ 空仓止盈价(%.4f) >= 标记价(%.4f)，无法止盈，拒绝设置止盈", decision.TakeProfit, markPrice)
 		} else {
-			log.Printf("  ✅ 止盈价验证通过: %.4f < 入场价(%.4f) 且 < 当前价(%.4f)", decision.TakeProfit, actualEntryPrice, currentPrice)
+			log.Printf("  ✅ 止盈价验证通过: %.4f < 入场价(%.4f) 且 < 标记价(%.4f)", decision.TakeProfit, actualEntryPrice, markPrice)
 			// 只有验证通过才设置止盈
 			if err := at.trader.SetTakeProfit(decision.Symbol, "SHORT", quantity, decision.TakeProfit); err != nil {
 				log.Printf("  ⚠ 设置止盈失败: %v", err)
@@ -1632,12 +1662,28 @@ func (at *AutoTrader) executeUpdateStopLossWithRecord(decision *decision.Decisio
 	}
 
 	// 验证新止损价格合理性 (移动止损)
-	currentPrice := marketData.CurrentPrice
+	// 优先使用持仓返回的标记价格（交易所实际使用的标记价格）
+	var markPrice float64
+	if mp, ok := targetPosition["markPrice"].(float64); ok && mp > 0 {
+		markPrice = mp
+	} else if mpStr, ok := targetPosition["markPrice"].(string); ok {
+		if mp, err := strconv.ParseFloat(mpStr, 64); err == nil && mp > 0 {
+			markPrice = mp
+		}
+	}
+	// 如果未能从持仓获取标记价格，使用市场数据中的标记价格
+	if markPrice <= 0 {
+		markPrice = marketData.MarkPrice
+		if markPrice <= 0 {
+			// 如果标记价格仍然无效，回退到当前价格
+			markPrice = marketData.CurrentPrice
+		}
+	}
 
 	if positionSide == "LONG" {
-		// 规则1：多仓移动止损后，新止损必须仍然低于当前价，否则立即触发
-		if decision.NewStopLoss >= currentPrice {
-			return fmt.Errorf("多仓止损不能高于或等于当前价: 当前价 %.2f, 新止损 %.2f", currentPrice, decision.NewStopLoss)
+		// 规则1：多仓移动止损后，新止损必须仍然低于标记价，否则立即触发
+		if decision.NewStopLoss >= markPrice {
+			return fmt.Errorf("多仓止损不能高于或等于标记价: 标记价 %.2f, 新止损 %.2f", markPrice, decision.NewStopLoss)
 		}
 
 		// 规则2：根据移动方向，进行合理性提醒（非强制拒绝）
@@ -1654,13 +1700,13 @@ func (at *AutoTrader) executeUpdateStopLossWithRecord(decision *decision.Decisio
 			}
 		} else {
 			// 首次设置止损
-			log.Printf("  ✅ 多仓首次设置止损: %.2f (入场价: %.2f, 当前价格: %.2f)", decision.NewStopLoss, entryPrice, currentPrice)
+			log.Printf("  ✅ 多仓首次设置止损: %.2f (入场价: %.2f, 标记价格: %.2f)", decision.NewStopLoss, entryPrice, markPrice)
 		}
 
 	} else if positionSide == "SHORT" {
 		// 空仓镜像逻辑
-		if decision.NewStopLoss <= currentPrice {
-			return fmt.Errorf("空仓止损不能低于或等于当前价: 当前价 %.2f, 新止损 %.2f", currentPrice, decision.NewStopLoss)
+		if decision.NewStopLoss <= markPrice {
+			return fmt.Errorf("空仓止损不能低于或等于标记价: 标记价 %.2f, 新止损 %.2f", markPrice, decision.NewStopLoss)
 		}
 
 		if oldStopLoss > 0 {
@@ -1676,7 +1722,7 @@ func (at *AutoTrader) executeUpdateStopLossWithRecord(decision *decision.Decisio
 			}
 		} else {
 			// 首次设置止损
-			log.Printf("  ✅ 空仓首次设置止损: %.2f (入场价: %.2f, 当前价格: %.2f)", decision.NewStopLoss, entryPrice, currentPrice)
+			log.Printf("  ✅ 空仓首次设置止损: %.2f (入场价: %.2f, 标记价格: %.2f)", decision.NewStopLoss, entryPrice, markPrice)
 		}
 	}
 
@@ -1778,12 +1824,28 @@ func (at *AutoTrader) executeUpdateTakeProfitWithRecord(decision *decision.Decis
 	}
 
 	// 验证新止盈价格合理性 (移动止盈)
-	currentPrice := marketData.CurrentPrice
+	// 优先使用持仓返回的标记价格（交易所实际使用的标记价格）
+	var markPrice float64
+	if mp, ok := targetPosition["markPrice"].(float64); ok && mp > 0 {
+		markPrice = mp
+	} else if mpStr, ok := targetPosition["markPrice"].(string); ok {
+		if mp, err := strconv.ParseFloat(mpStr, 64); err == nil && mp > 0 {
+			markPrice = mp
+		}
+	}
+	// 如果未能从持仓获取标记价格，使用市场数据中的标记价格
+	if markPrice <= 0 {
+		markPrice = marketData.MarkPrice
+		if markPrice <= 0 {
+			// 如果标记价格仍然无效，回退到当前价格
+			markPrice = marketData.CurrentPrice
+		}
+	}
 
 	if positionSide == "LONG" {
-		// 规则1：多仓移动止盈后，新止盈必须仍然高于当前价
-		if decision.NewTakeProfit <= currentPrice {
-			return fmt.Errorf("多单止盈必须高于当前价格 (当前: %.2f, 新止盈: %.2f)", currentPrice, decision.NewTakeProfit)
+		// 规则1：多仓移动止盈后，新止盈必须仍然高于标记价
+		if decision.NewTakeProfit <= markPrice {
+			return fmt.Errorf("多单止盈必须高于标记价格 (标记价: %.2f, 新止盈: %.2f)", markPrice, decision.NewTakeProfit)
 		}
 
 		// 规则2：根据移动方向，进行合理性提醒
@@ -1800,13 +1862,13 @@ func (at *AutoTrader) executeUpdateTakeProfitWithRecord(decision *decision.Decis
 			}
 		} else {
 			// 首次设置止盈
-			log.Printf("  ✅ 多仓首次设置止盈: %.2f (入场价: %.2f, 当前价格: %.2f)", decision.NewTakeProfit, entryPrice, currentPrice)
+			log.Printf("  ✅ 多仓首次设置止盈: %.2f (入场价: %.2f, 标记价格: %.2f)", decision.NewTakeProfit, entryPrice, markPrice)
 		}
 
 	} else if positionSide == "SHORT" {
 		// 空仓镜像逻辑
-		if decision.NewTakeProfit >= currentPrice {
-			return fmt.Errorf("空单止盈必须低于当前价格 (当前: %.2f, 新止盈: %.2f)", currentPrice, decision.NewTakeProfit)
+		if decision.NewTakeProfit >= markPrice {
+			return fmt.Errorf("空单止盈必须低于标记价格 (标记价: %.2f, 新止盈: %.2f)", markPrice, decision.NewTakeProfit)
 		}
 
 		if oldTakeProfit > 0 {
@@ -1822,7 +1884,7 @@ func (at *AutoTrader) executeUpdateTakeProfitWithRecord(decision *decision.Decis
 			}
 		} else {
 			// 首次设置止盈
-			log.Printf("  ✅ 空仓首次设置止盈: %.2f (入场价: %.2f, 当前价格: %.2f)", decision.NewTakeProfit, entryPrice, currentPrice)
+			log.Printf("  ✅ 空仓首次设置止盈: %.2f (入场价: %.2f, 标记价格: %.2f)", decision.NewTakeProfit, entryPrice, markPrice)
 		}
 	}
 
@@ -1861,7 +1923,8 @@ func (at *AutoTrader) executeUpdateTakeProfitWithRecord(decision *decision.Decis
 		return fmt.Errorf("修改止盈失败: %w", err)
 	}
 
-	log.Printf("  ✓ 止盈已调整: %.2f (当前价格: %.2f)", decision.NewTakeProfit, marketData.CurrentPrice)
+	// markPrice 已在前面验证时获取，直接使用
+	log.Printf("  ✓ 止盈已调整: %.2f (标记价格: %.2f)", decision.NewTakeProfit, markPrice)
 	return nil
 }
 

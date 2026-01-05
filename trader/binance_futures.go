@@ -966,7 +966,7 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 		Type(futures.AlgoOrderTypeStopMarket).
 		ClosePosition(true).
 		TriggerPrice(fmt.Sprintf("%.8f", stopPrice)).
-		WorkingType(futures.WorkingTypeContractPrice).
+		WorkingType(futures.WorkingTypeMarkPrice).
 		Do(context.Background())
 	if err != nil {
 		return fmt.Errorf("Algo Order API 失败: %w", err)
@@ -1004,7 +1004,7 @@ func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quanti
 		Type(futures.AlgoOrderTypeTakeProfitMarket).
 		ClosePosition(true).
 		TriggerPrice(fmt.Sprintf("%.8f", takeProfitPrice)).
-		WorkingType(futures.WorkingTypeContractPrice).
+		WorkingType(futures.WorkingTypeMarkPrice).
 		Do(context.Background())
 	if err != nil {
 		return fmt.Errorf("Algo Order API 失败: %w", err)
