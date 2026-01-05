@@ -278,19 +278,31 @@ func (at *AutoTrader) handleNewKlineEvent(symbol string, kline market.Kline, dur
 	processedMap[kline.OpenTime] = true
 	at.processedKlines.Store("__global__", processedMap)
 
-	// 清理旧的记录（保留最近10个，避免内存泄漏）
-	if len(processedMap) > 10 {
-		// 找到最小的OpenTime并删除
-		var minTime int64 = -1
+	// 清理旧的记录（保留最近20个，避免内存泄漏）
+	// 优化：使用更高效的方式，只保留最近的记录
+	const maxProcessedKlines = 20
+	if len(processedMap) > maxProcessedKlines {
+		// 收集所有时间戳
+		times := make([]int64, 0, len(processedMap))
 		for t := range processedMap {
-			if minTime == -1 || t < minTime {
-				minTime = t
+			times = append(times, t)
+		}
+		// 找到需要删除的最旧记录（保留最新的maxProcessedKlines个）
+		// 使用简单的选择算法找到最小的N个值（N = len - maxProcessedKlines）
+		toDelete := len(times) - maxProcessedKlines
+		for i := 0; i < toDelete; i++ {
+			minIdx := i
+			for j := i + 1; j < len(times); j++ {
+				if times[j] < times[minIdx] {
+					minIdx = j
+				}
 			}
+			// 删除最旧的记录
+			delete(processedMap, times[minIdx])
+			// 从times中移除已删除的项（交换到最后）
+			times[minIdx], times[i] = times[i], times[minIdx]
 		}
-		if minTime != -1 {
-			delete(processedMap, minTime)
-			at.processedKlines.Store("__global__", processedMap)
-		}
+		at.processedKlines.Store("__global__", processedMap)
 	}
 
 	at.eventTriggerMutex.Unlock()

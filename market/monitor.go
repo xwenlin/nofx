@@ -28,6 +28,8 @@ type WSMonitor struct {
 	mu              sync.RWMutex       // 保护 wsEnabled 的读写
 	onNewKlineCb    OnNewKlineCallback // 新K线形成时的回调函数
 	cbMutex         sync.RWMutex       // 保护回调函数的读写
+	stopCleanup     chan struct{}      // 用于停止清理goroutine
+	cleanupWg       sync.WaitGroup     // 等待清理goroutine结束
 }
 type SymbolStats struct {
 	LastActiveTime   time.Time
@@ -53,6 +55,7 @@ func NewWSMonitor(batchSize int) *WSMonitor {
 		alertsChan:     make(chan Alert, 1000),
 		batchSize:      batchSize,
 		wsEnabled:      false, // 初始状态为 false，等待 Start() 成功启动后设为 true
+		stopCleanup:    make(chan struct{}),
 	}
 	return WSMonitorCli
 }
@@ -182,6 +185,10 @@ func (m *WSMonitor) Start(coins []string) {
 		m.combinedClient.Close()
 		return
 	}
+
+	// 启动定期清理goroutine（防止内存泄漏）
+	m.startCleanupRoutine()
+
 	log.Printf("✅ WebSocket实时监控已启动（实时模式）")
 }
 
@@ -387,7 +394,87 @@ func (m *WSMonitor) SetOnNewKlineCallback(cb OnNewKlineCallback) {
 	}
 }
 
+// startCleanupRoutine 启动定期清理goroutine（防止内存泄漏）
+func (m *WSMonitor) startCleanupRoutine() {
+	m.cleanupWg.Add(1)
+	go func() {
+		defer m.cleanupWg.Done()
+
+		// 每30分钟清理一次不再使用的K线数据
+		ticker := time.NewTicker(30 * time.Minute)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				m.cleanupUnusedKlineData()
+			case <-m.stopCleanup:
+				return
+			}
+		}
+	}()
+}
+
+// cleanupUnusedKlineData 清理不再使用的K线数据（防止内存泄漏）
+func (m *WSMonitor) cleanupUnusedKlineData() {
+	// 获取当前监控的币种集合
+	currentSymbols := make(map[string]bool)
+	for _, symbol := range m.symbols {
+		currentSymbols[strings.ToUpper(symbol)] = true
+	}
+
+	// 清理所有K线数据Map中不再使用的币种
+	klineMaps := []*sync.Map{
+		&m.klineDataMap3m,
+		&m.klineDataMap15m,
+		&m.klineDataMap1h,
+		&m.klineDataMap4h,
+	}
+
+	cleanedCount := 0
+	for _, klineMap := range klineMaps {
+		klineMap.Range(func(key, value interface{}) bool {
+			symbol := key.(string)
+			if !currentSymbols[symbol] {
+				klineMap.Delete(symbol)
+				cleanedCount++
+			}
+			return true
+		})
+	}
+
+	if cleanedCount > 0 {
+		log.Printf("🧹 清理了 %d 个不再使用的币种K线数据缓存", cleanedCount)
+	}
+
+	// 清理 ticker 数据
+	tickerCleaned := 0
+	m.tickerDataMap.Range(func(key, value interface{}) bool {
+		symbol := key.(string)
+		if !currentSymbols[symbol] {
+			m.tickerDataMap.Delete(symbol)
+			tickerCleaned++
+		}
+		return true
+	})
+
+	if tickerCleaned > 0 {
+		log.Printf("🧹 清理了 %d 个不再使用的币种ticker数据缓存", tickerCleaned)
+	}
+}
+
 func (m *WSMonitor) Close() {
+	// 停止清理goroutine
+	if m.stopCleanup != nil {
+		close(m.stopCleanup)
+		m.cleanupWg.Wait()
+	}
+
 	m.wsClient.Close()
-	close(m.alertsChan)
+	if m.combinedClient != nil {
+		m.combinedClient.Close()
+	}
+	if m.alertsChan != nil {
+		close(m.alertsChan)
+	}
 }

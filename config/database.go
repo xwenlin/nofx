@@ -62,7 +62,11 @@ type DatabaseInterface interface {
 	CreateDecisionLog(log *DecisionLog) error
 	GetDecisionLogs(traderID string, limit int) ([]*DecisionLog, error)
 	GetDecisionLogsWithPagination(traderID string, page, pageSize int, actionFilter string, statusFilter string, startTime *time.Time, endTime *time.Time) ([]*DecisionLog, int, error) // 返回日志列表和总数
-	GetDecisionLogByID(id int64) (*DecisionLog, error)                                                                                                                                  // 按需加载详细内容（包含长文本字段）
+	GetDecisionLogByID(id int64) (*DecisionLog, error)
+	// 收益率历史相关方法（优化：只查询必要的字段）
+	GetEquityHistory(traderID string, limit int) ([]EquityHistoryRecord, error)
+	// 统计信息相关方法（优化：只查询必要的字段，避免加载大字段）
+	GetStatisticsData(traderID string, limit int) ([]StatisticsRecord, error)
 	Close() error
 }
 
@@ -620,6 +624,23 @@ type DecisionLog struct {
 	Error               string    `json:"error"`
 	AIRequestDurationMs int64     `json:"ai_request_duration_ms"`
 	CreatedAt           time.Time `json:"created_at"`
+}
+
+// EquityHistoryRecord 收益率历史记录（轻量级，只包含必要的账户状态字段）
+type EquityHistoryRecord struct {
+	Timestamp        time.Time `json:"timestamp"`
+	CycleNumber      int       `json:"cycle_number"`
+	TotalEquity      float64   `json:"total_equity"`      // 账户净值（wallet + unrealized）
+	AvailableBalance float64   `json:"available_balance"` // 可用余额
+	TotalPnL         float64   `json:"total_pnl"`         // 总盈亏（相对初始余额）
+	PositionCount    int       `json:"position_count"`    // 持仓数量
+	MarginUsedPct    float64   `json:"margin_used_pct"`   // 保证金使用率
+}
+
+// StatisticsRecord 统计信息记录（轻量级，只包含必要的统计字段）
+type StatisticsRecord struct {
+	Success   bool   `json:"success"`   // 周期是否成功
+	Decisions string `json:"decisions"` // 执行的决策列表 (JSON)
 }
 
 // GenerateOTPSecret 生成OTP密钥
@@ -1873,4 +1894,100 @@ func (d *Database) GetDecisionLogByID(id int64) (*DecisionLog, error) {
 	}
 
 	return &l, nil
+}
+
+// GetEquityHistory 获取收益率历史数据（优化版本：只查询必要的字段，避免加载大字段）
+func (d *Database) GetEquityHistory(traderID string, limit int) ([]EquityHistoryRecord, error) {
+	// 只查询必要的字段：timestamp, cycle_number, account_state
+	// 不查询 system_prompt, input_prompt, cot_trace 等大字段
+	query := `
+		SELECT timestamp, cycle_number, COALESCE(account_state, '') as account_state
+		FROM decisions
+		WHERE trader_id = ?
+		ORDER BY timestamp DESC
+	`
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	rows, err := d.db.Query(query, traderID)
+	if err != nil {
+		return nil, fmt.Errorf("查询收益率历史失败: %w", err)
+	}
+	defer rows.Close()
+
+	var records []EquityHistoryRecord
+	for rows.Next() {
+		var timestamp time.Time
+		var cycleNumber int
+		var accountStateJSON string
+
+		if err := rows.Scan(&timestamp, &cycleNumber, &accountStateJSON); err != nil {
+			continue
+		}
+
+		// 解析账户状态JSON
+		var accountState struct {
+			TotalBalance          float64 `json:"total_balance"` // 实际存储的是TotalEquity
+			AvailableBalance      float64 `json:"available_balance"`
+			TotalUnrealizedProfit float64 `json:"total_unrealized_profit"` // 实际存储的是TotalPnL
+			PositionCount         int     `json:"position_count"`
+			MarginUsedPct         float64 `json:"margin_used_pct"`
+		}
+
+		if accountStateJSON != "" {
+			if err := json.Unmarshal([]byte(accountStateJSON), &accountState); err != nil {
+				continue
+			}
+		}
+
+		records = append(records, EquityHistoryRecord{
+			Timestamp:        timestamp,
+			CycleNumber:      cycleNumber,
+			TotalEquity:      accountState.TotalBalance, // TotalBalance字段实际存储的是TotalEquity
+			AvailableBalance: accountState.AvailableBalance,
+			TotalPnL:         accountState.TotalUnrealizedProfit, // TotalUnrealizedProfit字段实际存储的是TotalPnL
+			PositionCount:    accountState.PositionCount,
+			MarginUsedPct:    accountState.MarginUsedPct,
+		})
+	}
+
+	// 反转数组，让时间从旧到新排列（用于图表显示）
+	for i, j := 0, len(records)-1; i < j; i, j = i+1, j-1 {
+		records[i], records[j] = records[j], records[i]
+	}
+
+	return records, nil
+}
+
+// GetStatisticsData 获取统计信息数据（优化版本：只查询必要的字段，避免加载大字段）
+func (d *Database) GetStatisticsData(traderID string, limit int) ([]StatisticsRecord, error) {
+	// 只查询必要的字段：success, decisions
+	// 不查询 system_prompt, input_prompt, cot_trace 等大字段
+	query := `
+		SELECT success, COALESCE(decisions, '') as decisions
+		FROM decisions
+		WHERE trader_id = ?
+		ORDER BY timestamp DESC
+	`
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	rows, err := d.db.Query(query, traderID)
+	if err != nil {
+		return nil, fmt.Errorf("查询统计信息失败: %w", err)
+	}
+	defer rows.Close()
+
+	var records []StatisticsRecord
+	for rows.Next() {
+		var record StatisticsRecord
+		if err := rows.Scan(&record.Success, &record.Decisions); err != nil {
+			continue
+		}
+		records = append(records, record)
+	}
+
+	return records, nil
 }

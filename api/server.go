@@ -1781,9 +1781,19 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 		return
 	}
 
-	// 获取尽可能多的历史数据（几天的数据）
+	// 优化：直接从数据库查询账户状态快照，避免加载完整的决策记录（包含大字段）
 	// 每3分钟一个周期：10000条 = 约20天的数据
-	records, err := trader.GetDecisionLogger().GetLatestRecords(10000)
+	db := trader.GetDatabase()
+	if db == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "数据库未配置",
+		})
+		return
+	}
+
+	// 使用优化的查询方法（只查询必要的字段）
+	database := db.(*config.Database)
+	equityRecords, err := database.GetEquityHistory(traderID, 10000)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("获取历史数据失败: %v", err),
@@ -1812,9 +1822,8 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 	}
 
 	// 如果无法从status获取，且有历史记录，则从第一条记录获取
-	if initialBalance == 0 && len(records) > 0 {
-		// 第一条记录的equity作为初始余额
-		initialBalance = records[0].AccountState.TotalBalance
+	if initialBalance == 0 && len(equityRecords) > 0 {
+		initialBalance = equityRecords[0].TotalEquity
 	}
 
 	// 如果还是无法获取，返回错误
@@ -1826,26 +1835,21 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 	}
 
 	var history []EquityPoint
-	for _, record := range records {
-		// TotalBalance字段实际存储的是TotalEquity
-		totalEquity := record.AccountState.TotalBalance
-		// TotalUnrealizedProfit字段实际存储的是TotalPnL（相对初始余额）
-		totalPnL := record.AccountState.TotalUnrealizedProfit
-
+	for _, record := range equityRecords {
 		// 计算盈亏百分比
 		totalPnLPct := 0.0
 		if initialBalance > 0 {
-			totalPnLPct = (totalPnL / initialBalance) * 100
+			totalPnLPct = (record.TotalPnL / initialBalance) * 100
 		}
 
 		history = append(history, EquityPoint{
 			Timestamp:        record.Timestamp.Format("2006-01-02 15:04:05"),
-			TotalEquity:      totalEquity,
-			AvailableBalance: record.AccountState.AvailableBalance,
-			TotalPnL:         totalPnL,
+			TotalEquity:      record.TotalEquity,
+			AvailableBalance: record.AvailableBalance,
+			TotalPnL:         record.TotalPnL,
 			TotalPnLPct:      totalPnLPct,
-			PositionCount:    record.AccountState.PositionCount,
-			MarginUsedPct:    record.AccountState.MarginUsedPct,
+			PositionCount:    record.PositionCount,
+			MarginUsedPct:    record.MarginUsedPct,
 			CycleNumber:      record.CycleNumber,
 		})
 	}

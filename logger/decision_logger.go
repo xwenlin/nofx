@@ -201,37 +201,6 @@ func (l *DecisionLogger) GetLatestRecords(n int) ([]*DecisionRecord, error) {
 	return records, nil
 }
 
-// GetRecordByDate 获取指定日期的所有记录
-func (l *DecisionLogger) GetRecordByDate(date time.Time) ([]*DecisionRecord, error) {
-	if l.db == nil || l.traderID == "" {
-		return nil, fmt.Errorf("数据库未配置，无法获取决策记录")
-	}
-
-	// 获取该日期的开始和结束时间
-	startTime := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
-	endTime := startTime.AddDate(0, 0, 1)
-
-	// 获取足够多的记录（假设一天最多1000条）
-	logs, err := l.db.GetDecisionLogs(l.traderID, 1000)
-	if err != nil {
-		return nil, fmt.Errorf("从数据库读取决策日志失败: %w", err)
-	}
-
-	var records []*DecisionRecord
-	for _, logEntry := range logs {
-		// 过滤出指定日期的记录
-		if logEntry.Timestamp.After(startTime) && logEntry.Timestamp.Before(endTime) {
-			var record DecisionRecord
-			if err := json.Unmarshal([]byte(logEntry.Content), &record); err != nil {
-				continue
-			}
-			records = append(records, &record)
-		}
-	}
-
-	return records, nil
-}
-
 // CleanOldRecords 清理N天前的旧记录（数据库记录由数据库自动管理，此方法保留用于清理文件备份）
 func (l *DecisionLogger) CleanOldRecords(days int) error {
 	// 数据库记录由数据库自动管理，不需要手动清理
@@ -277,23 +246,30 @@ func (l *DecisionLogger) GetStatistics() (*Statistics, error) {
 		return nil, fmt.Errorf("数据库未配置，无法获取统计信息")
 	}
 
-	// 获取所有记录（使用足够大的limit）
-	logs, err := l.db.GetDecisionLogs(l.traderID, 10000)
+	// 优化：使用轻量级查询，只获取必要的字段（success, decisions）
+	// 避免加载 system_prompt, input_prompt, cot_trace 等大字段
+	database := l.db.(*config.Database)
+	statRecords, err := database.GetStatisticsData(l.traderID, 10000)
 	if err != nil {
-		return nil, fmt.Errorf("从数据库读取决策日志失败: %w", err)
+		return nil, fmt.Errorf("从数据库读取统计信息失败: %w", err)
 	}
 
 	stats := &Statistics{}
 
-	for _, logEntry := range logs {
-		var record DecisionRecord
-		if err := json.Unmarshal([]byte(logEntry.Content), &record); err != nil {
-			continue
-		}
-
+	for _, statRecord := range statRecords {
 		stats.TotalCycles++
 
-		for _, action := range record.Decisions {
+		// 解析决策列表（JSON字符串）
+		var decisions []DecisionAction
+		if statRecord.Decisions != "" {
+			if err := json.Unmarshal([]byte(statRecord.Decisions), &decisions); err != nil {
+				// 如果解析失败，跳过该记录的决策统计，但继续统计周期数
+				continue
+			}
+		}
+
+		// 统计开仓/平仓次数
+		for _, action := range decisions {
 			if action.Success {
 				switch action.Action {
 				case "open_long", "open_short":
@@ -307,7 +283,8 @@ func (l *DecisionLogger) GetStatistics() (*Statistics, error) {
 			}
 		}
 
-		if record.Success {
+		// 统计成功/失败周期数
+		if statRecord.Success {
 			stats.SuccessfulCycles++
 		} else {
 			stats.FailedCycles++
